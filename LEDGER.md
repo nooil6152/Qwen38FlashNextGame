@@ -20,7 +20,7 @@ Later request (2026-11-07, after `v0.1`):
 `build.bat` are on disk; `build.bat Release` compiles with **clang-cl (ClangCL)** and links `bin\Town3D.exe`.
 `--selftest` renders 7 preset views to `shots\*.bmp` with **0 GL errors** and now also audits the crowd
 (routing, bridge crossings, overlaps, walk-through probe). The interactive window runs at a vsync-locked **60.0 fps**
-at 1280x720 — 32 902 tris/frame with 120 walkers, 63 142 with 400. `v0.1` (pre-pedestrian) is tagged and pushed.
+at 1280x720 — 32 902 tris/frame with 120 walkers, 63 142 with 400. `v0.1` (pre-pedestrian, `91b4974`) and **`v0.2` (`8a36c80`, the crowd)** are both tagged and pushed.
 Not yet verified by a human: how the pictures actually *look* (the model has no image input, so verification is
 numeric — see §5). Remaining polish: night brightness (ISS-021), ISS-012, ISS-018, ISS-023. Details in [`CONTINUE.md`](CONTINUE.md).
 
@@ -91,6 +91,7 @@ Newest last. "Verification" is what I actually ran, not what should work.
 | 19 | 13:05–13:20 | wire into engine | done | `main.cpp`: crowd built with the town (and on `R` regenerate), own dynamic VBO, drawn in the depth **and** colour passes, `playerFreeAt()` now refuses both walls *and* bodies, HUD shows walker count, `--peds N` (default 120, 0 disables), new shot `07_crowd_street` framed on the busiest corner, `Town3D.vcxproj` lists the new files. | — |
 | 20 | 13:10–13:30 | verification | done | Two bugs caught while building (ISS-023 `near` is a `windows.h` macro; ISS-024 my clamp statements cut the `else if` argument chain). Selftest: 157/169 junctions walkable (the 12 missing are exactly the ones standing in open water), 66 river crossings in 180 simulated seconds, **0 overlaps / 0 in walls / 0 in water**, walk-through probe stops at 0.75 m. Interactive: 60.0 fps at 120 and at 400 walkers. | ISS-023, ISS-024, V-7, V-8 |
 | 21 | 14:06 | tag `v0.2` | done | Annotated tag **`v0.2`** created on the pedestrian commit `8a36c80` and pushed. Message: *"v0.2 - pedestrians walking the town"* (kept as the tag annotation because a git refname cannot contain spaces); tagger identity taken from the repo-local `user.*`, so it matches the commits. **Unsigned** — no signing key on this machine, so GitHub shows no *Verified* badge, same as `v0.1`. `v0.1` (`91b4974`) is left where it was, so the pre-pedestrian build stays reachable. | §3a |
+| 22 | 14:17 | docs | done | `README.md` gained a **Versions** table (`v0.1`/`v0.2` → commits, with a note that the tags are unsigned so there is no *Verified* badge) and a "which document is which" pointer; `CONTINUE.md` header corrected — it still said the crowd work was "the next commit" when it was already tagged — and now records `main`/tag SHAs plus a warning that `C:\Source\game` is the stale pre-move copy; this ledger's status line updated to `v0.2`. | — |
 
 ### 3a. Identity hygiene on the push
 

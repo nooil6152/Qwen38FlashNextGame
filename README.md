@@ -14,6 +14,25 @@ quads and pyramids, no textures, no model files, no third-party libraries.
 * **Dependencies:** none. `opengl32.lib`, `user32.lib`, `gdi32.lib` only. The GL 3.x entry points are
   loaded by a small hand-written loader (`src/gl_core.*`) instead of GLEW/GLAD/gl3w.
 
+## Versions
+
+| Tag | Commit | What it is |
+|---|---|---|
+| **`v0.2`** | `8a36c80` | **current** — pedestrians: they walk the street network, cross at bridges, avoid one another, and are solid to you |
+| `v0.1` | `91b4974` | first working version — town, two rivers and bridges, sun with shadow mapping, clouds, 600 s day/night cycle |
+
+Both are annotated tags carrying a one-line message. They are **unsigned** — no signing key is configured on the
+machine that builds this — so GitHub shows no *Verified* badge; that is expected, not a warning.
+`main` may sit a commit or two ahead of the newest tag when the change is documentation only.
+
+### Which document is which
+
+| File | For whom | Contains |
+|---|---|---|
+| `README.md` | you, running it | this guide: build, run, controls, what is inside the code, how to check it works |
+| [`LEDGER.md`](LEDGER.md) | anyone auditing the work | running journal: every design decision with its reasoning, issue register (found / fixed / still open), verification numbers, requirement-by-requirement traceability |
+| [`CONTINUE.md`](CONTINUE.md) | whoever picks the code up next | resume notes: current state, locked-in parameters, gotchas that already bit once |
+
 ## Build
 
 ```bat

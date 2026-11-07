@@ -1,9 +1,14 @@
 # CONTINUE.md — Town3D resume notes
 
-**Last saved:** after adding the pedestrians. `build.bat Release` compiles with clang-cl and `bin\Town3D.exe` runs:
-`--selftest` = 7 shots + crowd audit, 0 GL errors; interactive = 60 fps with 120 walkers (and with 400).
-`v0.1` (the pre-pedestrian build) is tagged and pushed; the crowd work is the next commit.
-Companion document: `LEDGER.md` (work journal, design decisions D-1…D-15, issue register, verification log).
+**Last saved:** after tagging `v0.2`. Repo **`github.com/nooil6152/Qwen38FlashNextGame`**, branch `main` = `1efa520`.
+Tags: **`v0.2` = `8a36c80`** (pedestrians), `v0.1` = `91b4974` (first working build). `build.bat Release` compiles with
+clang-cl and `bin\Town3D.exe` runs: `--selftest` = 7 shots + crowd audit, 0 GL errors; interactive = 60 fps with 120
+walkers (and with 400). Companion document: `LEDGER.md` (work journal, design decisions D-1…D-15, ISS-001…ISS-027,
+verification V-1…V-9).
+
+**Work happens in `C:\Source\Qwen38FlashNextGame` — that is the git checkout.** `C:\Source\game` is the *stale copy
+from before the project was moved*: no `.git`, older sources, no `people.*`, no `tools\`. Editing there loses work
+silently. If in doubt, `git -C <path> rev-parse --show-toplevel` before touching anything.
 
 **Next thing to do:** ask the user to look at it (V-5 has never been done — no human has seen a frame), then
 ISS-021 (night is too dark) and ISS-026 (crowd has no daily rhythm).
