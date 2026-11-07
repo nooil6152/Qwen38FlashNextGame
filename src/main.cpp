@@ -1031,7 +1031,10 @@ static bool captureBmp(const char* path)
     for (int y = 0; y < h; ++y)                      // BMP is bottom-up, GL is bottom-up too
     {
         const unsigned char* src = &img[(size_t)y * w * 3];
-        unsigned char* dst = &out[(size_t)(h - 1 - y) * row];
+        // ISS-031: glReadPixels row 0 is the screen BOTTOM and a biHeight>0 BMP file row 0
+        // is the image bottom as well, so the rows already match. Reversing them here is what
+        // made every screenshot come out vertically mirrored.
+        unsigned char* dst = &out[(size_t)y * row];
         for (int x = 0; x < w; ++x)
         {
             dst[x * 3 + 0] = src[x * 3 + 2];         // B
