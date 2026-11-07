@@ -1083,12 +1083,61 @@ static int drainGlErrors(const char* when)
     return n;
 }
 
+// ---------------------------------------------------------------------------
+// ISS-032 audit (a): where the DRAWN ground actually is.
+//
+// Deliberately does not call World::surfaceAt() - that is the number under
+// test, and comparing it with itself is exactly what made V-10 worthless. This
+// ray-casts the triangle soup that goes to the GPU and returns the highest
+// solid surface over a point, so it disagrees with surfaceAt() whenever the
+// builder drew something other than what the query reports.
+// ---------------------------------------------------------------------------
+static bool triYAt(const Vertex& a, const Vertex& b, const Vertex& c,
+                   float x, float z, float& y)
+{
+    // signed 2D cross products in the XZ plane; barycentric weights
+    const float fa = (c.x - b.x) * (z - b.z) - (c.z - b.z) * (x - b.x);   // weight of a
+    const float fb = (a.x - c.x) * (z - c.z) - (a.z - c.z) * (x - c.x);   // weight of b
+    const float fc = (b.x - a.x) * (z - a.z) - (b.z - a.z) * (x - a.x);   // weight of c
+    const float area = fa + fb + fc;
+    if (std::fabs(area) < 1e-6f) return false;        // near-vertical wall: no height answer
+    const float eps = 1e-4f;
+    const bool in = area > 0.0f ? (fa >= -eps && fb >= -eps && fc >= -eps)
+                                : (fa <=  eps && fb <=  eps && fc <=  eps);
+    if (!in) return false;
+    y = (fa * a.y + fb * b.y + fc * c.y) / area;
+    return true;
+}
+
+// capY ignores anything drawn higher than that, because a tree canopy or a
+// roof over your head is not the surface you stand on - the question here is
+// whether the ground under a walker is drawn where surfaceAt() put it.
+static bool meshTopAt(const World& w, float x, float z, float capY, float& top,
+                      int& hits, int& above)
+{
+    top = -1e30f;
+    hits = 0;
+    above = 0;
+    const size_t n = w.solid.size() - (w.solid.size() % 3);
+    for (size_t i = 0; i + 2 < n; i += 3)
+    {
+        float y;
+        if (triYAt(w.solid[i], w.solid[i + 1], w.solid[i + 2], x, z, y))
+        {
+            if (y > capY) { ++above; continue; }
+            ++hits;
+            if (y > top) top = y;
+        }
+    }
+    return hits > 0;
+}
+
 static int runSelfTest()
 {
     CreateDirectoryA("shots", nullptr);
     const vec3 core(0.0f, 0.0f, 0.0f);
     const float riverH = corline(TW_RIVER_H) + TW_ROAD * 0.5f;   // -77
-    Shot shots[7];
+    Shot shots[9];
     int n = 0;
     shots[n] = { "01_downtown_street", corline(4) + 7.0f, corline(6) + 7.0f,
                  yawToward(vec3(corline(4) + 7.0f, 0, corline(6) + 7.0f), core), 0.05f, 60.0f }; ++n;
@@ -1100,6 +1149,7 @@ static int runSelfTest()
     shots[n] = { "06_clouds", g_world.spawn.x, g_world.spawn.z, g_world.spawnYaw + 0.6f, 0.95f, 60.0f }; ++n;
 
     int errors = 0;
+    int glErr  = 0;      // GL complaints, kept apart from the audit faults below
 
     // Walk the crowd for a few minutes of simulated time first: it spreads them
     // out for the pictures, and the numbers below are how the simulation is
@@ -1198,6 +1248,169 @@ static int runSelfTest()
             if (best2 <= need - 0.06f) { ++errors; }
             held.wait = 0.0f;
         }
+
+        // ---- audit (a): surfaceAt() vs the triangles it is supposed to describe
+        // Points chosen where each surface is known to exist, including the
+        // edges where the two definitions of "the ground" have historically
+        // disagreed: kerb bands, deck mouths, street edges, block interiors.
+        {
+            float worst = 0.0f, worstSink = 0.0f, worstFloat = 0.0f;
+            float wx = 0, wz = 0, wTop = 0, wSrf = 0;
+            int bad = 0, samples = 0, misses = 0, inBuilding = 0, overhead = 0;
+            char worstWhere[96] = "-";
+
+            struct Probe { const char* what; float x, z; };
+            std::vector<Probe> ps;
+            const float kerbMidV = corline(TW_RIVER_V) + TW_ROAD * 0.5f;   // 91
+            const float kerbMidH = corline(TW_RIVER_H) + TW_ROAD * 0.5f;   // -77
+            for (int i = 1; i < TW_GRID - 1; i += 2)
+            {
+                ps.push_back({ "street centre", corline(i) + 7.0f, corline(4) + 7.0f });
+                ps.push_back({ "street centre", corline(4) + 7.0f, corline(i) + 7.0f });
+                ps.push_back({ "street edge",   corline(i) + 7.0f + 6.9f, corline(10) + 7.0f });
+                ps.push_back({ "street edge",   corline(10) + 7.0f, corline(i) + 7.0f - 6.9f });
+                // Block interiors are where the buildings are, so probe a small
+                // spread and keep only the paving that is actually walkable - a
+                // ray that lands on a roof is true but not a surface to stand on.
+                const float bx = corline(i) + TW_ROAD + TW_BLOCK * 0.5f;
+                const float bz = corline(i + 1) + TW_ROAD + TW_BLOCK * 0.5f;
+                const float off[5][2] = { { 0, 0 }, { -14, 0 }, { 14, 0 }, { 0, -14 }, { 0, 14 } };
+                for (int o2 = 0; o2 < 5; ++o2)
+                    if (!g_world.blockedAt(bx + (float)off[o2][0], bz + (float)off[o2][1]))
+                        ps.push_back({ "block paving", bx + (float)off[o2][0], bz + (float)off[o2][1] });
+                    else
+                        ++inBuilding;
+            }
+            for (size_t q = 0; q < g_world.bridgeZones.size(); ++q)
+            {
+                const AABB& b = g_world.bridgeZones[q];
+                const float cx = (b.minX + b.maxX) * 0.5f, cz = (b.minZ + b.maxZ) * 0.5f;
+                ps.push_back({ "deck centre", cx, cz });
+                ps.push_back({ "deck edge",   b.minX + 0.5f, cz });
+                ps.push_back({ "deck edge",   b.maxX - 0.5f, cz });
+                ps.push_back({ "deck edge",   cx, b.minZ + 0.5f });
+                ps.push_back({ "deck edge",   cx, b.maxZ - 0.5f });
+            }
+            for (int i = 1; i < TW_GRID - 1; i += 3)
+            {
+                ps.push_back({ "kerb V", kerbMidV + TW_RIVER_VH + 0.5f, corline(i) + 7.0f });
+                ps.push_back({ "kerb V", kerbMidV - TW_RIVER_VH - 0.5f, corline(i) + 7.0f });
+                ps.push_back({ "kerb H", corline(i) + 7.0f, kerbMidH + TW_RIVER_HH + 0.5f });
+                ps.push_back({ "kerb H", corline(i) + 7.0f, kerbMidH - TW_RIVER_HH - 0.5f });
+            }
+            for (size_t k = 0; k < g_people.peds.size() && k < 20; ++k)
+            {
+                const size_t j = g_people.peds.size() > 20 ? (k * g_people.peds.size()) / 20 : k;
+                ps.push_back({ "ped feet", g_people.peds[j].pos.x, g_people.peds[j].pos.z });
+            }
+
+            for (size_t s = 0; s < ps.size(); ++s)
+            {
+                const float srf = g_world.surfaceAt(ps[s].x, ps[s].z);
+                float top; int hits = 0, high = 0;
+                // "could a walker be standing in it" = anything within a step of
+                // the reported surface; a canopy at 4.7 m is not that.
+                if (!meshTopAt(g_world, ps[s].x, ps[s].z, srf + 1.0f, top, hits, high))
+                { ++misses; continue; }
+                if (high > 0) ++overhead;
+                ++samples;
+                const float d = top - srf;                 // >0: ground drawn HIGHER than the query says
+                if (std::fabs(d) > 0.01f) ++bad;
+                if (d > worstSink) worstSink = d;
+                if (-d > worstFloat) worstFloat = -d;
+                if (std::fabs(d) > std::fabs(worst))
+                {
+                    worst = d; wx = ps[s].x; wz = ps[s].z; wTop = top; wSrf = srf;
+                    snprintf(worstWhere, sizeof(worstWhere), "%s", ps[s].what);
+                }
+            }
+            // A walker sinks visually by exactly this much: the drawn surface is
+            // higher than the height its feet were set from.
+            logfmt("[mesh] drawn ground vs surfaceAt: %d walkable samples, %d disagree >0.01 m, "
+                   "%d found no triangle, %d points left out because a building stands there, "
+                   "%d with something overhead (canopy/roof, ignored)\n",
+                   samples, bad, misses, inBuilding, overhead);
+            logfmt("[mesh] worst %.3f m at (%.1f, %.1f) [%s]: mesh %.3f vs surfaceAt %.3f | "
+                   "worst drawn-higher %.3f (sinks walkers), worst drawn-lower %.3f (floats them)\n",
+                   worst, wx, wz, worstWhere, wTop, wSrf, worstSink, worstFloat);
+            if (worstSink > 0.05f)
+            {
+                ++errors;
+                logfmt("[mesh] FAULT: geometry stands above the surface walkers are seated on\n");
+            }
+        }
+
+        // ---- audit (b): is the emitted body where pos.y says it is?
+        // Reads the vertices that are about to be uploaded, not the simulation
+        // state, so a sign or arithmetic error in addBox()/emit() shows up here
+        // even though pos.y is perfectly on the ground.
+        {
+            std::vector<Vertex> probe;
+            g_people.emit(probe);
+            const size_t nped = g_people.peds.size();
+            const size_t per = nped ? probe.size() / nped : 0;
+            float worstFoot = 0.0f, worstHt = 0.0f;
+            size_t wi = 0, hi = 0;
+            float loAll = 1e30f, hiAll = -1e30f, loFoot = 1e30f;
+            for (size_t k = 0; k < nped; ++k)
+            {
+                float mn = 1e30f, mx = -1e30f;
+                for (size_t v = 0; v < per; ++v)
+                {
+                    const Vertex& vv = probe[k * per + v];
+                    if (vv.y < mn) mn = vv.y;
+                    if (vv.y > mx) mx = vv.y;
+                }
+                const float foot = g_people.peds[k].pos.y;
+                // A stride lifts the swinging foot; with legs up to 0.52 rad the
+                // sole of the trailing shoe rises about 0.10 m. Anything BELOW the
+                // feet plane is still a hole in the ground as far as the walker is
+                // concerned, so that side gets the tight tolerance.
+                const float below = foot - mn;                    // >0: part of the body underground
+                const float lift  = mn - foot;                    // >0: sole raised by the stride
+                const float dHt   = std::fabs((mx - foot) - 1.765f);  // hair top at feet + 1.765
+                const float dFoot = below > 0.005f ? below : (lift > 0.12f ? lift - 0.12f : 0.0f);
+                if (dFoot > worstFoot) { worstFoot = dFoot; wi = k; }
+                if (dHt   > worstHt)   { worstHt   = dHt;   hi = k; }
+                if (mn < loAll) loAll = mn;
+                if (mx > hiAll) hiAll = mx;
+                if (foot < loFoot) loFoot = foot;
+            }
+            logfmt("[pedmesh] %d peds, %d verts each (%d tris/ped) | worst underground/lift %.3f m "
+                   "(ped %d), worst height error %.3f m (ped %d)\n",
+                   (int)nped, (int)per, (int)(per / 3), worstFoot, (int)wi, worstHt, (int)hi);
+            logfmt("[pedmesh] mesh y range %.3f .. %.3f | lowest ped feet %.3f | expect sole at feet, "
+                   "hair at feet+1.765\n", loAll, hiAll, loFoot);
+            if (per != 324) logfmt("[pedmesh] (!) %d verts per ped, not the 324 that 9 boxes make\n", (int)per);
+            if (worstFoot > 0.005f || worstHt > 0.02f)
+            {
+                ++errors;
+                logfmt("[pedmesh] FAULT: emitted body does not match its feet plane\n");
+            }
+        }
+
+        // ---- audit (c): the body as pixels. Shots 08 and 09 use the *same*
+        // camera, one with a walker pinned 4 m in front of it and one with that
+        // walker taken away, so subtracting the two BMPs leaves nothing but the
+        // body. That measures what actually reaches the screen without trusting
+        // surfaceAt(), emit() or a colour guess. tools/peddiff.mjs does the maths.
+        {
+            Person& pin = g_people.peds[0];
+            const float bx = corline(10) + 7.0f, bz = corline(2) + 7.0f;   // a street junction
+            pin.pos = vec3(bx, g_world.surfaceAt(bx, bz), bz);
+            pin.vel = vec3(0, 0, 0); pin.yaw = 0.0f; pin.phase = 0.0f; pin.wait = 1e9f;
+            const float cx = pin.pos.x, cz = pin.pos.z + 4.0f;             // 4 m directly behind
+            shots[n] = { "08_ped_pinned_4m", cx, cz, yawToward(vec3(cx, 0, cz), pin.pos), 0.0f, 150.0f }; ++n;
+            shots[n] = { "09_ped_removed",   cx, cz, yawToward(vec3(cx, 0, cz), pin.pos), 0.0f, 150.0f }; ++n;
+            const float eye = g_world.surfaceAt(cx, cz) + kEyeHigh;
+            const float metresPerPx = 2.0f * 4.0f * std::tan(35.0f * kPi / 180.0f) / (float)g_h;
+            logfmt("[pedshot] 08/09: walker pinned at (%.1f, %.1f) feet %.3f, camera 4 m back eye %.2f\n"
+                   "        expect a body %.0f px tall, head %.0f px above centre, feet %.0f px below\n",
+                   bx, bz, pin.pos.y, eye,
+                   1.765f / metresPerPx,
+                   (eye - (pin.pos.y + 1.765f)) / metresPerPx,
+                   (eye - pin.pos.y) / metresPerPx);
+        }
     }
     for (int i = 0; i < n; ++i)
     {
@@ -1208,10 +1421,20 @@ static int runSelfTest()
         g_yaw = shots[i].yaw;
         g_pitch = shots[i].pitch;
 
+        // Shot 09 is shot 08 with the pinned walker put back out of the frame;
+        // nothing else changes, so the two pictures differ by exactly one body.
+        if (!g_people.peds.empty() && strstr(shots[i].name, "09_") != nullptr)
+        {
+            Person& pin = g_people.peds[0];
+            const float outBy = TW_TERRAIN * 0.7f;    // not "far": windows.h defines far (ISS-023)
+            pin.pos = vec3(outBy, g_world.surfaceAt(outBy, outBy), outBy);
+            pin.wait = 1e9f;
+        }
+
         SkyState sky;
         skyFor(g_clock, sky);
         render(sky);
-        errors += drainGlErrors(shots[i].name);
+        glErr += drainGlErrors(shots[i].name);
 
         // how much crowd is actually in this frame?
         int nearPeds = 0; float nearD = 1e9f;
@@ -1234,7 +1457,7 @@ static int runSelfTest()
                g_world.blockedAt(g_pos.x, g_pos.z) ? 1 : 0, g_pos.y, g_pedTris, nearPeds,
                g_people.peds.empty() ? 0.0f : nearD, saved ? "saved" : "FAILED");
     }
-    logfmt("[selftest] done, %d shots, %d GL errors\n", n, errors);
+    logfmt("[selftest] done, %d shots, %d audit fault(s), %d GL errors\n", n, errors, glErr);
     return errors ? 2 : 0;
 }
 

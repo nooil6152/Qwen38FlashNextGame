@@ -52,17 +52,27 @@ void addBox(std::vector<Vertex>& v, const vec3& feet, float yaw,
     const float cs = std::cos(swing), ss = std::sin(swing);
     const float cy = std::cos(yaw),   sy = std::sin(yaw);
 
-    // local -> world: swing about x (through pivot), then yaw about y, then feet.
+    // local -> world: swing about x (through the pivot), then yaw about y, then feet.
+    //
+    // The pivot has to come back ADD. It is subtracted to put the corner in the
+    // hinge's frame, rotated there, and then must be re-added before the yaw and
+    // the feet offset - otherwise every box is positioned relative to its own
+    // hinge instead of relative to the body, and the whole figure collapses onto
+    // the feet plane: head and torso at ankle height, legs 0.7 m underground.
+    // That is ISS-032, and it is invisible to any audit of Person::pos, because
+    // the feet were in the right place the whole time. (V-12)
     auto toWorld = [&](const vec3& local) {
         const vec3 o = local - pivot;                       // relative to the hinge
-        const float y = o.y * cs - o.z * ss;                // swing
+        const float y = o.y * cs - o.z * ss;                // swing about x
         const float z = o.y * ss + o.z * cs;
-        return vec3(feet.x + o.x * cy + z * sy,
-                    feet.y + y,
-                    feet.z + o.x * sy - z * cy);
+        const float px = pivot.x + o.x;                     // hinge back in, then yaw
+        const float pz = pivot.z + z;
+        return vec3(feet.x + px * cy + pz * sy,
+                    feet.y + pivot.y + y,
+                    feet.z + px * sy - pz * cy);
     };
 
-    const vec3 c[8] = {
+    vec3 c[8] = {
         toWorld(centre + vec3(-half.x, -half.y, -half.z)),
         toWorld(centre + vec3( half.x, -half.y, -half.z)),
         toWorld(centre + vec3( half.x,  half.y, -half.z)),
@@ -72,9 +82,24 @@ void addBox(std::vector<Vertex>& v, const vec3& feet, float yaw,
         toWorld(centre + vec3( half.x,  half.y,  half.z)),
         toWorld(centre + vec3(-half.x,  half.y,  half.z)),
     };
-    static const int F[6][4] = { {0,1,2,3}, {5,4,7,6}, {4,0,3,7}, {1,5,6,2}, {3,2,6,7}, {4,5,1,0} };
+    // The surface a walker stands on is the floor of its own body. A swinging
+    // leg rotates about the hip, so the toe of the shoe (centre offset forward,
+    // so the reach is sqrt(0.72^2 + 0.15^2) = 0.735) dips about 1.5 cm below the
+    // sole plane mid-stride and draws through the road. Lift the box by however
+    // far its own lowest corner went under - which is also what a real heel does
+    // when the toe points down. A pure translation, so the normals are unaffected.
     const vec3 mid = centre;                                // box centre, for facing test
-    const vec3 wc = toWorld(mid);
+    vec3 wc = toWorld(mid);
+    float under = 0.0f;
+    for (int i = 0; i < 8; ++i)
+    {
+        const float dy = c[i].y - feet.y;
+        if (dy < under) under = dy;
+    }
+    if (under < 0.0f)
+        for (int i = 0; i < 8; ++i) c[i].y -= under;
+    wc.y -= under;
+    static const int F[6][4] = { {0,1,2,3}, {5,4,7,6}, {4,0,3,7}, {1,5,6,2}, {3,2,6,7}, {4,5,1,0} };
 
     for (int f = 0; f < 6; ++f)
     {
