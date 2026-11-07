@@ -14,8 +14,146 @@ journal, D-1…D-16, ISS-001…ISS-032, V-1…V-10, and **§0a - the prompt log*
 from before the project was moved*: no `.git`, older sources, no `people.*`, no `tools\`. Editing there loses work
 silently. If in doubt, `git -C <path> rev-parse --show-toplevel` before touching anything.
 
-**Next thing to do:** ask the user to look at it (V-5 has never been done — no human has seen a frame), then
-ISS-021 (night is too dark) and ISS-026 (crowd has no daily rhythm).
+**Next thing to do:** work §0 below, in that order.
+
+## 0. RESUME HERE (written 15:39, session ended by the user mid-investigation)
+
+Checkpoint: working tree clean at **`main` = `6cfa871`** (docs) on top of **`v0.3` = `4d6c83a`** (code). Both pushed.
+`bin\Town3D.exe` on disk is built from `4d6c83a` (linked 15:00:51, newer than every source) and is known to run:
+selftest 7 shots / 0 GL errors, interactive 60.0 fps with `eye 1.75` logged. **Nothing is half-edited.** Start by
+rebuilding to prove the toolchain is still sane: `cmd //c build.bat`.
+
+### 0.1 Job one — ISS-031, the mirrored screenshot (one line, do it first)
+
+`src/main.cpp`, `captureBmp()` (function starts line 1015). The loop at 1031 says *"BMP is bottom-up, GL is bottom-up
+too"* — correct — and then contradicts itself on line **1034**:
+
+```cpp
+unsigned char* dst = &out[(size_t)(h - 1 - y) * row];   // WRONG: reverses rows that already match
+unsigned char* dst = &out[(size_t)y * row];             // FIX: GL row y -> file row y
+```
+
+Leave `analyzeFrame()` alone (line 968, `skyFrom = h*2/3` with the comment "row 0 is the screen bottom") — it reads
+the GL-ordered buffer, so every statistic ever logged is right; only the files lie. Header is `biHeight > 0`
+(putU32 at 1050), i.e. bottom-up, which is what the fix assumes.
+
+Verify, in this order: (1) rebuild; (2) `--selftest`; (3) check orientation numerically with node (no python on this
+box) — for a street shot the *stored* bytes must now run dark→bright with increasing file offset, and the mean luma of
+the last third of the pixel data must match the logged `sky` figure within ~2:
+
+```js
+// flipcheck.mjs  -  node flipcheck.mjs bin/shots/01_downtown_street.bmp
+const b = require('fs').readFileSync(process.argv[2]);
+const w = b.readInt32LE(18), h = b.readInt32LE(22), off = b.readInt32LE(10);
+const row = ((w * 3 + 3) / 4) * 4;
+const rowLuma = y => { let a = 0, n = 0;
+  for (let x = 0; x < w; x += 7) { const s = off + y * row + 3 * x;      // stored B,G,R
+    a += 0.2126 * b[s + 2] + 0.7152 * b[s + 1] + 0.0722 * b[s]; n++; }
+  return a / n; };
+let bot = 0, top = 0;
+for (let y = 0; y < h / 3; ++y) bot += rowLuma(y);            // first file rows = image BOTTOM
+for (let y = Math.floor(h * 2 / 3); y < h; ++y) top += rowLuma(y);
+console.log('image bottom band', (bot / (h / 3)).toFixed(1),
+            ' image top band', (top / (h / 3)).toFixed(1));
+// fixed file    =>  top band ~= logged `sky` (~73 in daylight), bottom ~= logged `gnd` (~18)
+// mirrored file =>  the two numbers swap
+```
+
+Regenerate all screenshots afterwards, and treat **every** BMP written before the fix as mirrored — including the
+user's reference capture `bin\shots\manual_26200031.bmp` and everything in `shots\`.
+
+### 0.2 Job two — ISS-032, walkers still read as sunk
+
+Already eliminated by reading, **do not re-check**:
+- `People::emit()` (people.cpp:116) builds all 10 boxes at local y **0 … 1.765 above `feet = p.pos`** (line 125), and
+  `addBox`'s `toWorld` (48–62) is swing-about-x → yaw-about-y → `+feet`. No negation, no offset.
+- `p.pos.y = w.surfaceAt(...)` is people.cpp:**527**, in its own final loop over *all* peds after every push. The
+  `continue`s in the main steering loop cannot skip it, and `update()` only bails early on `dt <= 0 || peds.empty()`.
+- `VS_SOLID` (shaders.h:9–23) passes `aPos` through untouched — no camera-relative maths, no y flip — and the ped VAO
+  uses the same stride/offsets as the static VAO (`kStride`, float offsets 0/3/6/9, main.cpp:321–333).
+- `g_pedTris` is a steady 12 960 = 120 × 108, so `emit()` is not accumulating stale vertices.
+- The mirror in ISS-031 **preserves** ground contact, so it cannot explain sinking on its own.
+
+So the disagreement is between `surfaceAt()` and the geometry, or between `pos.y` and what reaches the GPU. Write
+**both** audits; neither may use `surfaceAt()` as its reference — that circularity is what made V-10 worthless.
+
+**(a) Is the drawn ground where `surfaceAt()` says it is?** Ray-cast the actual triangle soup, `World::solid`
+(`Vertex` is 44 bytes, triangles are consecutive triples, `g_solidTris*3` verts; `World::water` is a separate
+vector so it is excluded automatically):
+
+```
+for each triangle: project to XZ; skip if |2D area| < 1e-6 (near-vertical faces)
+                   if (x,z) inside the projected triangle (same-sign edge tests, allow 1e-4 slop)
+                   solve the plane for y at that point (barycentric interpolation)
+highest hit = meshTopAt(x,z)
+```
+
+Sample and print `surfaceAt` vs `meshTop` side by side, worst offender with its coordinates: street centre lines
+(`-364+56i+7`, both axes), street edges (±6.9 from centre), block interiors, deck centres (`bridgeZones`, and 0.5 m
+inside each edge), kerb bands (`|x - 91|` ∈ [11, 12.05] for the vertical river, `|z + 77|` ∈ [14, 15.05] for the
+horizontal), and 20 random ped positions. **Pass: |diff| < 0.01 m everywhere.** Watch specifically for a paving or
+kerb quad drawn *over* the asphalt (then the true top is higher than `surfaceAt()` says = a walker that looks sunk
+while every existing test stays green).
+
+**(b) Is the body where `pos.y` says it is?** Right after `emit()` in the selftest, walk `g_pedMesh` ped by ped
+(108 verts each, in emit order) and for ped *k* record min/max vertex y; assert
+`|minY - peds[k].pos.y| < 0.005` and `|(maxY - peds[k].pos.y) - 1.765| < 0.02`, and print the worst walker. Expect
+sole at exactly `pos.y` and hair top at `pos.y + 1.765`.
+
+**(c) Cross-check on pixels.** Add a shot that pins one walker 4 m in front of a camera at eye height on a street, then
+measure the ped blob in the corrected BMP by colour mask (palettes: `kSkin`/`kHair`/`kShirt`/`kTrousers`/`kShoes`,
+people.cpp:25–42; skin is the only strongly warm `R ≫ B` colour in the scene). A body should span
+`px = 1.765 · (h/2) / (d · tan(35°))` — the projection really is **vertical** fov 70° (`mat4Perspective(fovyRad,…)`,
+`m[5] = 1/tan(fov/2)`, main.cpp:678), so that is **≈ 227 px for a walker at 4 m in a 720 px window**. Recompute it if
+the shot distance or window height changes rather than trusting the number. If the blob is far shorter, or its bottom
+row sits above where the road meets it, the bug is in the draw path and (a)/(b) will say which.
+
+### 0.3 Job three — make the user's screenshots reproducible
+
+Manual captures (key press, main.cpp:1355–1359 → `shots/manual_<GetTickCount()>.bmp`, which lands in `bin\shots\`
+because that is the cwd) log only the luma. Add one `logfmt` with pos, yaw, pitch, clock, `--peds` count and the
+nearest ped's distance, so "look at manual_xxx.bmp" becomes a scene that can be re-rendered and measured instead of
+debated. (Their capture `manual_26200031.bmp` from 15:18 is the ISS-032 evidence and is unreproducible as it stands.)
+
+### 0.4 Facts that cost me time today
+
+- `stat -c %Y` is mtime; **`%s` is file size**. My first "is the binary current?" check compared mtimes to the size and
+  "passed" all nine sources. Check again with `%Y`, or `find src -newer bin/Town3D.exe`.
+- `--peds 0` **skips the whole crowd-audit block** — no `[crowd]`, no `[surface]`, only 6 shots. Never use it to check
+  that the audits work.
+- No python on this machine (Store stub only). **node v22 works** and is the right tool for BMP forensics: 54-byte
+  header, `off=readInt32LE(10)`, rows padded to 4 bytes, bottom-up, stored **B,G,R**.
+- `read` on an image returns *"model does not support images"* — no amount of BMP→PNG conversion makes seeing
+  possible. All verification here must be numeric.
+- `build.bat` = Release + selftest (~40 s). `tools/smoke.ps1 -Seconds N [-Extra "--peds 400"]` drives the real window.
+- This shell still starts in the stale `C:\Source\game`. `cd /c/Source/Qwen38FlashNextGame` first, always.
+
+### 0.5 Release workflow — the user's standing rule, every green build
+
+"Working" means **it runs**, not *it is correct*: open bugs never hold a tag back. After each successful build:
+commit (explicit paths, never `-A` — a `strata-config.json` lives in the tree and must stay untracked), push, cut an
+annotated tag, verify the remote, leak-scan, then **tell the user it is done** and beep.
+
+```bash
+git add <paths> && git -c user.name="nooil6152" -c user.email="nooil6152@outlook.com" commit -F - << 'MSG' … MSG
+git -c user.name="nooil6152" -c user.email="nooil6152@outlook.com" tag -a v0.4 <sha> -m "v0.4 - <what>; builds and runs"
+export GH_CONFIG_DIR="$LOCALAPPDATA/Temp/gh-nooil"   # the ISOLATED gh login dir, not the default one
+NOOIL_TOKEN=$(gh auth token)
+git -c credential.helper= -c credential.helper="!f(){ echo username=nooil6152; echo password=$NOOIL_TOKEN; };f" push origin main v0.4
+git fetch -q origin --tags && git ls-remote --heads --tags origin
+# scan all revisions for the identity patterns in LEDGER 3a (real name + personal email);
+# never spell those strings into a tracked file, or the doc becomes the leak. must print 0
+powershell -NoProfile -Command "[console]::beep(880,180); [console]::beep(1175,260)"
+```
+
+Tags are **unsigned** (no key on this box) so GitHub shows no *Verified* badge — expected, not a fault. Never push as
+the machine default identity. Then `LEDGER.md`: work-log row + issue rows + a §0a prompt-log line for every
+user prompt that changed code (git prompts and anything naming the user are excluded — published repo).
+
+### 0.6 After ISS-031/032
+
+Then, in order: ISS-021 night too dark (`gnd` ≈ 5/255, needs the user's taste), ISS-026 crowd has no daily rhythm,
+ISS-030 kerb/deck steps need ramp quads, ISS-027 instance the crowd, and the §6 requirement play-test in LEDGER.
 
 ---
 
