@@ -801,10 +801,25 @@ static void render(const SkyState& sky)
 // ---------------------------------------------------------------------------
 // player
 // ---------------------------------------------------------------------------
+// Height of the ground under the player, kept smooth. The town offers five
+// walkable heights inside 18 cm - fields, block paving, asphalt, river kerbs,
+// bridge decks - and if the eye is measured from y=0 instead you hover over a
+// deck while every walker looks sunk into the road. dt >= 1 means "snap": used
+// on spawn and when the selftest teleports between shots.
+static float g_groundY = 0.0f;
+static void followGround(float dt)
+{
+    const float want = g_world.surfaceAt(g_pos.x, g_pos.z);
+    if (dt >= 1.0f) { g_groundY = want; return; }
+    g_groundY += (want - g_groundY) * clampf(dt * 14.0f, 0.0f, 1.0f);
+    if (std::fabs(want - g_groundY) < 1e-4f) g_groundY = want;
+}
+
 static void resetPlayerToSpawn()
 {
     g_pos = g_world.spawn;
-    g_pos.y = kEyeHigh;
+    followGround(1.0f);
+    g_pos.y = g_groundY + kEyeHigh;
     g_yaw = g_world.spawnYaw;
     g_pitch = 0.0f;
     g_bob = 0.0f;
@@ -856,7 +871,8 @@ static void movePlayer(float dt)
         }
         g_bob += dist * 1.5f;
     }
-    g_pos.y = kEyeHigh + (dist > 0.0f ? std::sin(g_bob) * 0.05f : 0.0f);
+    followGround(dt);
+    g_pos.y = g_groundY + kEyeHigh + (dist > 0.0f ? std::sin(g_bob) * 0.05f : 0.0f);
 }
 
 static void tickTime(float dt)
@@ -1119,6 +1135,41 @@ static int runSelfTest()
         shots[n] = { "07_crowd_street", px, pz, yawToward(vec3(px, 0, pz), q.pos), -0.10f, 150.0f }; ++n;
         logfmt("[crowd] shot 07 framed on the busiest street corner (%d walkers within 30 m)\n", bestNear);
 
+        // Ground contact: a walker's feet must sit exactly on the surface under
+        // them. This is what "the pedestrians are sunk into the road" looks like
+        // in numbers, and it catches any new surface height somebody adds.
+        float maxFoot = 0.0f;
+        int onStreet = 0, onDeck = 0, onKerb = 0, onLot = 0;
+        for (size_t i = 0; i < g_people.peds.size(); ++i)
+        {
+            const vec3& q = g_people.peds[i].pos;
+            const float srf = g_world.surfaceAt(q.x, q.z);
+            maxFoot = std::max(maxFoot, std::fabs(q.y - srf));
+            if      (srf == TW_DECK_Y)   ++onDeck;
+            else if (srf == TW_QUAY_Y)   ++onKerb;
+            else if (srf == TW_STREET_Y) ++onStreet;
+            else                         ++onLot;
+        }
+        logfmt("[crowd] ground contact: worst foot error %.3f m | standing on "
+               "street %d deck %d kerb %d block %d\n",
+               maxFoot, onStreet, onDeck, onKerb, onLot);
+        if (maxFoot > 0.001f) { ++errors; logfmt("[crowd] (!) walkers are not on the ground\n"); }
+
+        // Surface table, sampled where each one is known to exist: proves the
+        // heights reported match the heights built.
+        {
+            const AABB d0 = g_world.bridgeZones.empty() ? AABB{0,0,0,0}
+                                                        : g_world.bridgeZones[0];
+            logfmt("[surface] street %.2f  block %.2f  field %.2f  kerb %.2f  deck %.2f "
+                   "(deck centre %.2f)\n",
+                   g_world.surfaceAt(corline(3) + 7.0f, corline(1) + 7.0f),
+                   g_world.surfaceAt(corline(3) + TW_ROAD + 3.0f, corline(1) + TW_ROAD + 3.0f),
+                   g_world.surfaceAt(TW_CITY_HALF + 40.0f, TW_CITY_HALF + 40.0f),
+                   g_world.surfaceAt(corline(TW_RIVER_V) + TW_ROAD * 0.5f + TW_RIVER_VH + 0.5f, corline(3) + 7.0f),
+                   TW_DECK_Y,
+                   g_world.surfaceAt((d0.minX + d0.maxX) * 0.5f, (d0.minZ + d0.maxZ) * 0.5f));
+        }
+
         // Push the player straight at a walker who is held still, and measure how
         // close they get. Bodies are 0.30 m + 0.45 m apart, so anything under that
         // means the player is inside somebody.
@@ -1149,6 +1200,8 @@ static int runSelfTest()
     {
         g_clock = shots[i].clock;
         g_pos = vec3(shots[i].x, kEyeHigh, shots[i].z);
+        followGround(1.0f);                       // stand on the surface, don't float
+        g_pos.y = g_groundY + kEyeHigh;
         g_yaw = shots[i].yaw;
         g_pitch = shots[i].pitch;
 
@@ -1173,9 +1226,9 @@ static int runSelfTest()
                "detail %5.2f  chroma %4.1f  colors %4d\n",
                shots[i].name, g_stats.luma, g_stats.skyLuma, g_stats.gndLuma, g_stats.dark,
                g_stats.blown, g_stats.detail, g_stats.chroma, g_stats.colors);
-        logfmt("       sun %5.1f deg  night %4.2f  clock %5.1f  blockedAt=%d  pedtris %5d  peds<60m %2d  nearest %6.1f  %s\n",
+        logfmt("       sun %5.1f deg  night %4.2f  clock %5.1f  blockedAt=%d  eye %.2f  pedtris %5d  peds<60m %2d  nearest %6.1f  %s\n",
                sky.elevation * 180.0f / kPi, sky.night, (double)g_clock,
-               g_world.blockedAt(g_pos.x, g_pos.z) ? 1 : 0, g_pedTris, nearPeds,
+               g_world.blockedAt(g_pos.x, g_pos.z) ? 1 : 0, g_pos.y, g_pedTris, nearPeds,
                g_people.peds.empty() ? 0.0f : nearD, saved ? "saved" : "FAILED");
     }
     logfmt("[selftest] done, %d shots, %d GL errors\n", n, errors);
@@ -1318,8 +1371,8 @@ int main(int argc, char** argv)
         }
         if (++g_frameErrors % 600 == 0) rc = drainGlErrors("frame");
         if (g_trace && g_frames && g_frames % 240 == 0)
-            logfmt("[perf] frame %u  %.1f fps  pos %.1f,%.1f  clock %.1f  tris %d\n", g_frames,
-                   (double)g_fps, (double)g_pos.x, (double)g_pos.z, (double)g_clock,
+            logfmt("[perf] frame %u  %.1f fps  pos %.1f,%.1f eye %.2f  clock %.1f  tris %d\n", g_frames,
+                   (double)g_fps, (double)g_pos.x, (double)g_pos.z, (double)g_pos.y, (double)g_clock,
                    g_solidTris + g_waterTris + g_cloudTris + g_pedTris);
     }
 

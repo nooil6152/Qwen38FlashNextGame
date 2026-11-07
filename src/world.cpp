@@ -278,7 +278,7 @@ void World::build(uint32_t seed)
     {
         Rect big{ -TW_TERRAIN, TW_TERRAIN, -TW_TERRAIN, TW_TERRAIN };
         std::vector<Rect> pieces = cutOut(big, waterCuts);
-        for (size_t k = 0; k < pieces.size(); ++k) flatQuad(solid, pieces[k], -0.04f, C_FIELD);
+        for (size_t k = 0; k < pieces.size(); ++k) flatQuad(solid, pieces[k], TW_FIELD_Y, C_FIELD);
     }
 
     // ---- rivers: riverbed, banks, quay copings ---------------------------
@@ -310,18 +310,18 @@ void World::build(uint32_t seed)
         const float zc = side == 0 ? hz - TW_RIVER_HH : hz + TW_RIVER_HH;
         const float lo = side == 0 ? zc - 0.7f : zc;
         const float hi = side == 0 ? zc : zc + 0.7f;
-        const float clo = side == 0 ? zc - 1.05f : zc;
-        const float chi = side == 0 ? zc : zc + 1.05f;
+        const float clo = side == 0 ? zc - TW_QUAY_W : zc;
+        const float chi = side == 0 ? zc : zc + TW_QUAY_W;
         wallWithGaps(solid, true, lo, hi, -TW_RIVER_LEN, TW_RIVER_LEN, wb, 0.0f, gapsV, C_STONE);
-        wallWithGaps(solid, true, clo, chi, -TW_RIVER_LEN, TW_RIVER_LEN, 0.0f, 0.14f, gapsV, C_QUAY);
+        wallWithGaps(solid, true, clo, chi, -TW_RIVER_LEN, TW_RIVER_LEN, 0.0f, TW_QUAY_Y, gapsV, C_QUAY);
         // vertical river: walls of constant x, extending along z
         const float xc = side == 0 ? vx - TW_RIVER_VH : vx + TW_RIVER_VH;
         const float xlo = side == 0 ? xc - 0.7f : xc;
         const float xhi = side == 0 ? xc : xc + 0.7f;
-        const float xclo = side == 0 ? xc - 1.05f : xc;
-        const float xchi = side == 0 ? xc : xc + 1.05f;
+        const float xclo = side == 0 ? xc - TW_QUAY_W : xc;
+        const float xchi = side == 0 ? xc : xc + TW_QUAY_W;
         wallWithGaps(solid, false, xlo, xhi, -TW_RIVER_LEN, TW_RIVER_LEN, wb, 0.0f, gapsH, C_STONE);
-        wallWithGaps(solid, false, xclo, xchi, -TW_RIVER_LEN, TW_RIVER_LEN, 0.0f, 0.14f, gapsH, C_QUAY);
+        wallWithGaps(solid, false, xclo, xchi, -TW_RIVER_LEN, TW_RIVER_LEN, 0.0f, TW_QUAY_Y, gapsH, C_QUAY);
     }
 
     // ---- bridge decks, railings, walkable zones --------------------------
@@ -330,21 +330,21 @@ void World::build(uint32_t seed)
         const Bridge& b = bridges[k];
         // The slab goes all the way down to the riverbed, which closes the gap
         // that the bank wall had to leave for the road.
-        box(solid, b.deck.x0, b.deck.x1, wb, 0.12f, b.deck.z0, b.deck.z1, C_DECK, 0.0f, 0.0f, 0.25f);
-        const float rt = 0.55f;
+        box(solid, b.deck.x0, b.deck.x1, wb, TW_DECK_Y, b.deck.z0, b.deck.z1, C_DECK, 0.0f, 0.0f, 0.25f);
+        const float rt = TW_RAIL_T;
         const float rx0 = b.deck.x0 + rt, rx1 = b.deck.x1 - rt;
         const float rz0 = b.deck.z0 + rt, rz1 = b.deck.z1 - rt;
         if (b.alongZ)
         {
-            box(solid, b.deck.x0, rx0, 0.12f, 1.18f, b.deck.z0, b.deck.z1, C_RAIL, 0.0f, 0.0f, 0.1f);
-            box(solid, rx1, b.deck.x1, 0.12f, 1.18f, b.deck.z0, b.deck.z1, C_RAIL, 0.0f, 0.0f, 0.1f);
+            box(solid, b.deck.x0, rx0, TW_DECK_Y, 1.18f, b.deck.z0, b.deck.z1, C_RAIL, 0.0f, 0.0f, 0.1f);
+            box(solid, rx1, b.deck.x1, TW_DECK_Y, 1.18f, b.deck.z0, b.deck.z1, C_RAIL, 0.0f, 0.0f, 0.1f);
             addBlocker(blockers, b.deck.x0, rx0, b.deck.z0, b.deck.z1);
             addBlocker(blockers, rx1, b.deck.x1, b.deck.z0, b.deck.z1);
         }
         else
         {
-            box(solid, b.deck.x0, b.deck.x1, 0.12f, 1.18f, b.deck.z0, rz0, C_RAIL, 0.0f, 0.0f, 0.1f);
-            box(solid, b.deck.x0, b.deck.x1, 0.12f, 1.18f, rz1, b.deck.z1, C_RAIL, 0.0f, 0.0f, 0.1f);
+            box(solid, b.deck.x0, b.deck.x1, TW_DECK_Y, 1.18f, b.deck.z0, rz0, C_RAIL, 0.0f, 0.0f, 0.1f);
+            box(solid, b.deck.x0, b.deck.x1, TW_DECK_Y, 1.18f, rz1, b.deck.z1, C_RAIL, 0.0f, 0.0f, 0.1f);
             addBlocker(blockers, b.deck.x0, b.deck.x1, b.deck.z0, rz0);
             addBlocker(blockers, b.deck.x0, b.deck.x1, rz1, b.deck.z1);
         }
@@ -430,7 +430,7 @@ void World::build(uint32_t seed)
                               : district == 2 ? C_GRASS : vec3(0.31f, 0.36f, 0.22f);
             for (size_t k = 0; k < lotPieces.size(); ++k)
                 if (lotPieces[k].x1 - lotPieces[k].x0 > 0.4f && lotPieces[k].z1 - lotPieces[k].z0 > 0.4f)
-                    flatQuad(solid, lotPieces[k], 0.0f, lotCol);
+                    flatQuad(solid, lotPieces[k], TW_LOT_Y, lotCol);
 
             footprints.clear();
 
@@ -548,7 +548,7 @@ void World::build(uint32_t seed)
         std::vector<Rect> pieces = cutOut(r, streetCuts);
         for (size_t k = 0; k < pieces.size(); ++k)
             if (pieces[k].x1 - pieces[k].x0 > 0.4f && pieces[k].z1 - pieces[k].z0 > 0.4f)
-                flatQuad(solid, pieces[k], 0.05f, C_ASPHALT);
+                flatQuad(solid, pieces[k], TW_STREET_Y, C_ASPHALT);
         streetCuts.push_back(r);   // horizontal roads will not overlap these
     }
     for (int j = 0; j < TW_GRID; ++j)
@@ -557,7 +557,7 @@ void World::build(uint32_t seed)
         std::vector<Rect> pieces = cutOut(r, streetCuts);
         for (size_t k = 0; k < pieces.size(); ++k)
             if (pieces[k].x1 - pieces[k].x0 > 0.4f && pieces[k].z1 - pieces[k].z0 > 0.4f)
-                flatQuad(solid, pieces[k], 0.05f, C_ASPHALT);
+                flatQuad(solid, pieces[k], TW_STREET_Y, C_ASPHALT);
     }
 
     // ---- street lighting near the centre ---------------------------------
@@ -686,4 +686,45 @@ bool World::blockedAt(float x, float z) const
         }
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// What is under your feet
+// ---------------------------------------------------------------------------
+// This town has five walkable heights and they differ by only 18 cm, so they
+// cannot be guessed: assume one level and pedestrians sink into the asphalt
+// (streets are 5 cm proud of the blocks) or wade through a bridge deck (12 cm).
+// Order matters. The deck slab outranks the kerbs it crosses.
+float World::surfaceAt(float x, float z) const
+{
+    const Cor cor;
+
+    // Bridge deck slab. bridgeZones is inset from the slab by the railing
+    // thickness, so inflate back out to the footprint actually drawn.
+    for (size_t q = 0; q < bridgeZones.size(); ++q)
+    {
+        const AABB& b = bridgeZones[q];
+        if (x > b.minX - TW_RAIL_T && x < b.maxX + TW_RAIL_T &&
+            z > b.minZ - TW_RAIL_T && z < b.maxZ + TW_RAIL_T) return TW_DECK_Y;
+    }
+
+    // River kerbs: a coping of TW_QUAY_W on each bank of each river, running
+    // the whole river length. Where a deck crosses, the wall helper leaves a
+    // gap and the test above has already answered.
+    const float vx = cor(TW_RIVER_V) + TW_ROAD * 0.5f;
+    const float hz = cor(TW_RIVER_H) + TW_ROAD * 0.5f;
+    if (std::fabs(std::fabs(x - vx) - (TW_RIVER_VH + TW_QUAY_W * 0.5f)) < TW_QUAY_W * 0.5f) return TW_QUAY_Y;
+    if (std::fabs(std::fabs(z - hz) - (TW_RIVER_HH + TW_QUAY_W * 0.5f)) < TW_QUAY_W * 0.5f) return TW_QUAY_Y;
+
+    // Inside the street lattice. Streets are corridor i = [cor(i), cor(i)+ROAD],
+    // repeating every cell, so corridor membership is a modulo test.
+    if (std::fabs(x) <= TW_CITY_HALF && std::fabs(z) <= TW_CITY_HALF)
+    {
+        const float tx = std::fmod(x + TW_CITY_HALF, TW_CELL);
+        const float tz = std::fmod(z + TW_CITY_HALF, TW_CELL);
+        if (tx < TW_ROAD || tz < TW_ROAD) return TW_STREET_Y;
+        return TW_LOT_Y;
+    }
+
+    return TW_FIELD_Y;   // open ground beyond the grid
 }

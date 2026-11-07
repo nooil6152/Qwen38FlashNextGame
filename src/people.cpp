@@ -119,7 +119,10 @@ void People::emit(std::vector<Vertex>& out) const
     {
         const Person& p = peds[i];
         const float s    = std::sin(p.phase);
-        const vec3 feet(p.pos.x, p.pos.y + 0.03f * std::fabs(s), p.pos.z);   // walk bob
+        // Feet exactly on the surface under them - no vertical bob. A bob lifts
+        // the whole body, including the foot that is supposed to be planted, so
+        // it reads as floating or as clipping rather than as walking.
+        const vec3 feet(p.pos.x, p.pos.y, p.pos.z);
         const vec3 skin  = kSkin[p.skin    % (int)(sizeof(kSkin)/sizeof(vec3))];
         const vec3 hair  = kHair[p.hair    % (int)(sizeof(kHair)/sizeof(vec3))];
         const vec3 shirt = kShirt[p.shirt  % (int)(sizeof(kShirt)/sizeof(vec3))];
@@ -129,10 +132,12 @@ void People::emit(std::vector<Vertex>& out) const
         // torso: a touch of forward lean when walking
         addBox(out, feet, p.yaw, vec3(0, 1.02f, 0), vec3(0, 1.02f, 0), vec3(0.23f, 0.31f, 0.12f),
                0.06f * length(p.vel), shirt);
-        // head + hair cap
-        addBox(out, feet, p.yaw, vec3(0, 1.55f, 0), vec3(0, 1.55f, 0), vec3(0.19f, 0.19f, 0.19f),
+        // head + hair cap. The head sits ON the torso: with a gap here you see
+        // straight through the neck to the background, and a walker reads as a
+        // floating head with no body.
+        addBox(out, feet, p.yaw, vec3(0, 1.52f, 0), vec3(0, 1.52f, 0), vec3(0.19f, 0.19f, 0.19f),
                0.0f, skin);
-        addBox(out, feet, p.yaw, vec3(0, 1.75f, 0), vec3(0, 1.75f, 0), vec3(0.20f, 0.045f, 0.20f),
+        addBox(out, feet, p.yaw, vec3(0, 1.72f, 0), vec3(0, 1.72f, 0), vec3(0.20f, 0.045f, 0.20f),
                0.0f, hair);
         // arms swing opposite to the legs on the same side
         const float arm =  0.42f * s;
@@ -142,8 +147,10 @@ void People::emit(std::vector<Vertex>& out) const
         // legs: trouser cloth down to the ankle, shoe block at the foot
         addBox(out, feet, p.yaw, kLegPivotL, kLegPivotL + vec3(0, -0.33f, 0), vec3(0.10f, 0.33f, 0.11f), leg, trsrs);
         addBox(out, feet, p.yaw, kLegPivotR, kLegPivotR + vec3(0, -0.33f, 0), vec3(0.10f, 0.33f, 0.11f), -leg, trsrs);
-        addBox(out, feet, p.yaw, kLegPivotL, kLegPivotL + vec3(0, -0.70f, 0.02f), vec3(0.105f, 0.05f, 0.13f), leg, shoe);
-        addBox(out, feet, p.yaw, kLegPivotR, kLegPivotR + vec3(0, -0.70f, 0.02f), vec3(0.105f, 0.05f, 0.13f), -leg, shoe);
+        // Shoes sit on the surface: sole at the feet plane, top still inside
+        // the trouser leg, so nothing pokes below the road.
+        addBox(out, feet, p.yaw, kLegPivotL, kLegPivotL + vec3(0, -0.67f, 0.02f), vec3(0.105f, 0.05f, 0.13f), leg, shoe);
+        addBox(out, feet, p.yaw, kLegPivotR, kLegPivotR + vec3(0, -0.67f, 0.02f), vec3(0.105f, 0.05f, 0.13f), -leg, shoe);
     }
 }
 
@@ -152,9 +159,9 @@ void People::emit(std::vector<Vertex>& out) const
 // ---------------------------------------------------------------------------
 vec3 People::nodePos(int n) const
 {
-    if (n < 0 || n >= nodes) return vec3(0, TW_LEVEL, 0);
+    if (n < 0 || n >= nodes) return vec3(0, TW_STREET_Y, 0);
     const int i = n % TW_GRID, j = n / TW_GRID;
-    return vec3(corridorCentre(i), TW_LEVEL, corridorCentre(j));
+    return vec3(corridorCentre(i), TW_STREET_Y, corridorCentre(j));   // nodes are street crossings
 }
 
 int People::nodeOf(float x, float z) const
@@ -280,7 +287,7 @@ void People::build(const World& w, uint32_t seed, int count)
         }
         if (!fits) continue;
         Person p;
-        p.pos    = vec3(at.x, TW_LEVEL, at.z);
+        p.pos    = vec3(at.x, w.surfaceAt(at.x, at.z), at.z);
         p.anchor = p.pos;
         p.yaw    = irange(0, 628) * 0.01f;
         p.speed  = 1.05f + 0.65f * (irange(0, 100) / 100.0f);
@@ -508,6 +515,16 @@ void People::update(const World& w, float dt, const vec3& playerPos)
             if (dd < 1e-4f) { dx = 1.0f; dz = 0.0f; dd = 1.0f; }
             tryStep(A, dx / dd * (need - dd), dz / dd * (need - dd));
         }
+    }
+
+    // Feet follow the ground. Streets stand 5 cm proud of the blocks, bridge
+    // decks 12 cm and river kerbs 14 cm, so a walker held at one height looks
+    // as if its legs are missing (swallowed by the road) or as if it is wading
+    // through a deck. Last of all, because the pushes above can move bodies.
+    for (size_t a = 0; a < peds.size(); ++a)
+    {
+        Person& A = peds[a];
+        A.pos.y = w.surfaceAt(A.pos.x, A.pos.z);
     }
 }
 

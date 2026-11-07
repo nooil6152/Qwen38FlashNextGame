@@ -21,6 +21,8 @@ quads and pyramids, no textures, no model files, no third-party libraries.
 | **`v0.2`** | `8a36c80` | **current** — pedestrians: they walk the street network, cross at bridges, avoid one another, and are solid to you |
 | `v0.1` | `91b4974` | first working version — town, two rivers and bridges, sun with shadow mapping, clouds, 600 s day/night cycle |
 
+`main` can carry fixes past the newest tag; the table lists tagged builds only.
+
 Both are annotated tags carrying a one-line message. They are **unsigned** — no signing key is configured on the
 machine that builds this — so GitHub shows no *Verified* badge; that is expected, not a warning.
 `main` may sit a commit or two ahead of the newest tag when the change is documentation only.
@@ -112,6 +114,11 @@ so the night is genuinely dark, the stars come out and the windows in the buildi
   overlap is zero, pushing along X or Z separately so a shove never puts somebody through a wall. The player is
   immovable in that exchange — walkers step around you, you never push one along, and you cannot walk through
   one either.
+* **Feet on the ground.** There are five walkable heights within 18 cm of each other — fields, block paving,
+  asphalt, bridge decks, river kerbs — so "how high is the floor here" is a question you ask the world
+  (`World::surfaceAt`) and never a constant you assume. Walkers are re-seated on that surface every frame and
+  your eye height follows it too, which is why a walker's legs stop disappearing into the road and you stop
+  floating 12 cm above a bridge deck as you cross it.
 
 ## Verifying it without playing
 
@@ -131,12 +138,16 @@ Before the pictures it also walks the crowd for 180 simulated seconds and audits
 [crowd] 120 walkers, 157/169 walkable junctions, 268 street links | 119 walking 1 waiting 9 on bridge |
         66 crossings | overlaps 0 in-walls 0 in-water 0
 [crowd] walk-through probe: closest approach 0.75 m against a 0.75 m body ok
+[crowd] ground contact: worst foot error 0.000 m | standing on street 108 deck 12 kerb 0 block 0
+[surface] street 0.05  block 0.00  field -0.04  kerb 0.14  deck 0.12 (deck centre 0.12)
 ```
 
 The 12 unusable junctions are exactly the ones standing in open water, `66 crossings` says the routes really do
 use the bridges, the three zeroes are the "they must not walk through each other / into walls / into rivers"
 requirement, and the probe is "I cannot walk through them": walking into a person stops you at 0.75 m, which is
-their 0.30 m radius plus your 0.45 m one.
+their 0.30 m radius plus your 0.45 m one. The last two lines are the ground-contact audit — every walker's feet
+are exactly on the surface they are standing on (108 of them on asphalt, 12 on a bridge deck) — and the per-shot
+lines log the player's own eye height, `1.75` m on a street and `1.82` m on the deck shot.
 
 `tools/smoke.ps1` launches the real window, waits, reports CPU/RSS and kills it — a regression check for
 "does the app still survive its own message loop" (it did not, once: see LEDGER.md ISS-019). Add
@@ -154,4 +165,5 @@ fragment shader, so they look fine, but there is no real wave geometry (ISS-022)
 The crowd walks, crosses bridges and refuses to overlap, but it has no *life* yet: the same number of people are
 out at midnight as at noon, there is no rush hour and nobody waits to cross (ISS-026). Pedestrians are also
 animated on the CPU today, which is cheap enough at 400 walkers but is the first thing to instance if the crowd
-grows (ISS-027).
+grows (ISS-027). Kerbs and bridge mouths have no ramp geometry, so a walker snaps 9–14 cm when it steps onto a
+kerb or a deck and your eye smooths over the same step (ISS-030).

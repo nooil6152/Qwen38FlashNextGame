@@ -31,7 +31,16 @@ static const float TW_BLOCK      = 42.0f;   // block (lot) size
 static const float TW_ROAD        = 14.0f;  // street corridor width
 static const float TW_CELL        = TW_BLOCK + TW_ROAD;
 static const float TW_CITY_HALF   = TW_GRID * TW_CELL * 0.5f;   // 364 m
-static const float TW_LEVEL       = 0.0f;   // street height
+// Walkable surfaces are NOT all at one height. Anything standing on the ground
+// must ask World::surfaceAt(x,z): one shared "ground level" constant is exactly
+// what let walkers sink into the road and wade over bridge decks.
+static const float TW_FIELD_Y      = -0.04f; // terrain apron outside the grid
+static const float TW_LOT_Y        = 0.0f;   // block paving, grass
+static const float TW_STREET_Y     = 0.05f; // asphalt, raised to avoid z-fighting
+static const float TW_DECK_Y       = 0.12f; // bridge deck top
+static const float TW_QUAY_Y       = 0.14f; // river kerb / coping top
+static const float TW_QUAY_W       = 1.05f; // kerb width, both rivers
+static const float TW_RAIL_T       = 0.55f; // bridge railing thickness
 static const float TW_WATER_Y     = -1.55f; // river surface
 static const float TW_RIVERBED_Y  = -1.95f;
 static const float TW_TERRAIN     = 1400.0f;// outer terrain apron half-size
@@ -62,4 +71,9 @@ struct World
     // True if a player circle of radius TW_PLAYER_R at (x,z) overlaps a wall,
     // a prop, the water (unless standing on a bridge) or the world border.
     bool blockedAt(float x, float z) const;
+
+    // Height of the walkable surface under a point: fields, block paving,
+    // asphalt, river kerbs and bridge decks each sit at their own height.
+    // Deck wins over kerb, because a deck crosses the kerbs it passes through.
+    float surfaceAt(float x, float z) const;
 };

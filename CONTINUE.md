@@ -1,10 +1,12 @@
 # CONTINUE.md — Town3D resume notes
 
-**Last saved:** after tagging `v0.2`. Repo **`github.com/nooil6152/Qwen38FlashNextGame`**, branch `main` = `1efa520`.
-Tags: **`v0.2` = `8a36c80`** (pedestrians), `v0.1` = `91b4974` (first working build). `build.bat Release` compiles with
-clang-cl and `bin\Town3D.exe` runs: `--selftest` = 7 shots + crowd audit, 0 GL errors; interactive = 60 fps with 120
-walkers (and with 400). Companion document: `LEDGER.md` (work journal, design decisions D-1…D-15, ISS-001…ISS-027,
-verification V-1…V-9).
+**Last saved:** after fixing the sunk pedestrians (ISS-028 / ISS-029), on top of `v0.2`. Repo
+**`github.com/nooil6152/Qwen38FlashNextGame`**, branch `main` (`46dd539` was the commit before this pass). Tags:
+**`v0.2` = `8a36c80`** (pedestrians, as they were before this fix), `v0.1` = `91b4974` (first working build). The ground
+fix is **untagged** - tag it only when asked. `build.bat Release` compiles with clang-cl and `bin\Town3D.exe` runs:
+`--selftest` = 7 shots + crowd audit (routing, crossings, overlaps, walk-through probe, **ground contact**), 0 GL
+errors; interactive = 60 fps with 120 walkers (and with 400). Companion document: `LEDGER.md` (work journal, design
+decisions D-1…D-16, ISS-001…ISS-030, verification V-1…V-10, and **§0a - the prompt log**).
 
 **Work happens in `C:\Source\Qwen38FlashNextGame` — that is the git checkout.** `C:\Source\game` is the *stale copy
 from before the project was moved*: no `.git`, older sources, no `people.*`, no `tools\`. Editing there loses work
@@ -39,10 +41,10 @@ First-person walk-around of a procedurally generated low-poly town. OpenGL 3.3 c
 |---|---|---|
 | `src/gl_core.h/.cpp` | ~150/~90 | loader; `GetIntegerv` is loaded on purpose (driver's own pointer, see ISS-018) |
 | `src/math3d.h` | 102 | `vec3` has **no** single-float ctor — use `v * s` |
-| `src/people.h/.cpp` | 99/588 | **the crowd**: nav lattice over the street grid, BFS routes, downtown-biased errands, separation steering, hard non-overlap on a 4 m grid, 10-box bodies, `blocks()`/`pushOut()` for the player, `simulate()`/`stats()` for the selftest audit |
-| `src/world.h/.cpp` | ~660/~690 | town generator; seed 1337 → 330 buildings, 453 trees, 24 lamps, 13 bridges, 845 blockers |
+| `src/people.h/.cpp` | 99/605 | **the crowd**: nav lattice over the street grid, BFS routes, downtown-biased errands, separation steering, hard non-overlap on a 4 m grid, 10-box bodies, `blocks()`/`pushOut()` for the player, `simulate()`/`stats()` for the selftest audit |
+| `src/world.h/.cpp` | 79/730 | town generator; seed 1337 → 330 buildings, 453 trees, 24 lamps, 13 bridges, 845 blockers. Also owns `surfaceAt()` - the only correct answer to "what height is the ground here" |
 | `src/shaders.h` | ~200 | 5 programs; shadow fade `smoothstep(118,158,d)` inside the 165 m ortho radius |
-| `src/main.cpp` | ~1330 | complete: bootstrap, sky, render passes, player, crowd wiring, HUD, BMP, selftest, `main()` |
+| `src/main.cpp` | ~1380 | complete: bootstrap, sky, render passes, player (incl. `followGround`), crowd wiring, HUD, BMP, selftest, `main()` |
 | `Town3D.vcxproj/.sln`, `build.bat` | — | ClangCL via `-p:UseClang=true`, MSVC `v145` default; Console subsystem |
 | `tools/smoke.ps1` | — | launch/wait/report/kill the real window (needs `-File` invocation; inline `-Command` quoting breaks in bash) |
 | `README.md`, `LEDGER.md`, this file | — | docs |
@@ -57,29 +59,54 @@ First-person walk-around of a procedurally generated low-poly town. OpenGL 3.3 c
 - Pass order: shadow depth (cull FRONT, poly offset) → sky (depth masked, drawn first in colour pass) → solids → water (blend, depth-mask off) → clouds.
 - Selftest clocks: day 60, dusk 288, **night 450** (clock 300 is only −5.7°, i.e. just-after-sunset, not midnight).
 
-Pedestrian parameters (these three are load-bearing):
+Ground heights — **ask `World::surfaceAt(x,z)`, never assume** (D-16). Five walkable surfaces, 18 cm apart, and every
+one of them has swallowed a pedestrian at least once:
+
+| surface | Y | constant |
+|---|---|---|
+| fields outside the grid | −0.04 | `TW_FIELD_Y` |
+| block paving / grass | 0.00 | `TW_LOT_Y` |
+| asphalt streets | +0.05 | `TW_STREET_Y` |
+| bridge decks | +0.12 | `TW_DECK_Y` |
+| river kerbs (copings) | +0.14 | `TW_QUAY_Y`, width `TW_QUAY_W` = 1.05 |
+
+`surfaceAt` tests deck → kerb → street → block → field **in that order**: a deck crosses the kerbs it passes through,
+and a `bridgeZone` has to be inflated by `TW_RAIL_T` to recover the slab footprint the builder actually draws. Walkers
+are re-seated with `pos.y = surfaceAt(...)` at the *end* of `People::update()` (after every push, or the number is a
+lie); the player's eye is `g_groundY + kEyeHigh` from `followGround(dt)` in `main.cpp`, smoothed, `dt >= 1` = snap
+(spawn, screenshots). `TW_LEVEL` is **deleted** - one shared "ground level" was the bug (ISS-028). Selftest prints the
+surface table and asserts worst foot error **0.000 m**.
+
+Pedestrian parameters (load-bearing):
 
 - Corridor centre line `cor(i) = -364 + 56i`; node *is* the intersection of corridor i and j, so the graph and the
-  drawn street lattice can never drift apart. Vertical river = corridor **8** (x=87), horizontal = corridor **5**
-  (z=−173); bridges only at **even** corridors (the `j%2==0` / `i%2==0 && i!=8` predicates in `world.cpp`
-  `addBridges()` are mirrored in `people.cpp` — change one, change the other, then `--selftest` will prove it by
-  the walkable-node count, which must stay **157/169** for seed 1337).
+  drawn street lattice can never drift apart. Vertical river = corridor **8** (centre x = 91, half width 11 → banks at
+  80 and 102), horizontal = corridor **5** (centre z = −77, half width 14); bridges only at **even** corridors (the
+  `j%2==0` / `i%2==0 && i!=8` predicates in `world.cpp` are mirrored in `people.cpp` — change one, change the other,
+  then `--selftest` will prove it by the walkable-node count, which must stay **157/169** for seed 1337).
 - Body radius 0.30 m, walk 1.35 m/s ±25 %, 10 boxes → 108 tris. Player radius 0.45 m, so contact distance is 0.75 m.
 - Pedestrians reuse `World::blockedAt()`, i.e. they collide with a 0.45 m circle, not their own 0.30 m one
   (conservative on purpose: ISS-025).
+- Body is 1.765 m tall and **0.335 m is its widest reach from the centre line** (the shoulder). Keep that under the
+  0.45 m collision radius or a walker pressed against a wall will clip it. Soles sit exactly on the feet plane, the
+  head sits on the torso (no see-through neck), and there is **no vertical bob** - all three were "missing body"
+  reports (ISS-029).
 
 ## 5. Open work, best-value first
 
 1. **Human verification (V-5).** Nobody has *seen* it yet — the model has no image input, so all verification so
-   far is numeric. Ask the user to run `bin\Town3D.exe` and report how it looks, especially: do the walkers look
-   like people from 3 m, do they jostle unnaturally, is 120 the right crowd size (`--peds N`).
+   far is numeric. Walkers are now *provably* standing on the surface (V-10) but that is not the same as looking
+   right. Ask the user to run `bin\Town3D.exe` and report how it looks, especially: do the walkers look like people
+   from 3 m, do they jostle unnaturally, is 120 the right crowd size (`--peds N`), and does the eye stepping up onto
+   a bridge deck feel right.
 2. **ISS-021 night is too dark** (`gnd` luma ≈ 5/255). Options in the ledger row; needs the user's taste.
 3. **ISS-026 the crowd has no rhythm** — identical numbers of walkers at midnight and at noon, no rush hour,
    nobody waits to cross. Cheapest version: scale the active count by hour (park the rest in `wait` overnight).
 4. **Play-test the requirements** (`LEDGER.md` §6): can't enter buildings, bridges are the only crossings,
    shadows track the sun, clouds drift. Then mark B/V rows accordingly.
 5. **ISS-027** CPU skinning of the crowd (~13 k tris re-uploaded per frame at 120 walkers) — instance it if the
-   crowd ever grows. **ISS-022** water = 2 quads (cosmetic).
+   crowd ever grows. **ISS-022** water = 2 quads (cosmetic). **ISS-030** kerb and deck edges are steps, not ramps:
+   add ramp quads at the bridge mouths in `world.cpp` if the 9–14 cm snap shows up on camera.
 6. Optional: moon + moonlight at night, lamp-pool lights, `--walktest N` headless collision sweep (would turn
    "can't walk into buildings" into an automated check instead of a play-test, the same way the crowd probe
    already proves "can't walk into people").
@@ -115,3 +142,6 @@ Useful log greps: `grep -E "shot|luma" town3d.log`, `grep -E "^\[crowd\]" town3d
   falls through to "ignoring argument …" while still appearing to work (ISS-024). Clamp after the loop.
 - `World::blockedAt` is the single source of truth for walkability. Anything new that can be walked into must be
   added to `blockers` — then pedestrians exclude it from the nav graph automatically, with no code there.
+- **Append every prompt that changes code to `LEDGER.md` section 0a**, the prompt log, in order, as received.
+  Requests about git operations, and anything containing personal identifying details, are left out and must
+  stay out — that log is published inside the repository.
