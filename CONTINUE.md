@@ -1,17 +1,19 @@
 # CONTINUE.md — Town3D resume notes
 
-**Last saved:** `v0.5` = **`efb1a78`** (pedestrians have their bodies back), tagged and pushed. Repo
-**`github.com/nooil6152/Qwen38FlashNextGame`**, `main` = that commit plus this docs commit. Older tags: `v0.4` =
-`ffc7f54` (screenshots the right way up), `v0.3` = `4d6c83a` (ground following), `v0.2` = `8a36c80` (pedestrians),
-`v0.1` = `91b4974` (first working build).
-**What `v0.5` is:** it **runs** — that is the bar for a tag here, not correctness. `build.bat Release` compiles with
-clang-cl; `--selftest` = 9 shots + crowd/mesh/ped-mesh audits, **0 audit faults, 0 GL errors**; interactive = 60 fps at
-120 and 400 walkers.
-**Closed and confirmed by you:** **ISS-032** — the bodies were drawn from each box's hinge outward, so a walker's head
-was at ankle height and its legs hung 0.7 m through the road (`addBox()` subtracted the pivot and never added it back).
-**ISS-031** before it — every BMP was saved vertically mirrored. Both were found only after the audits stopped trusting
-the code under test. Companion document: `LEDGER.md` (work journal, D-1…D-16, ISS-001…ISS-032, V-1…V-12, and **§0a -
-the prompt log**).
+**Last saved:** `v0.6` = **`c305f52`** (HUD drawn inside the frame), tagged and pushed. Repo
+**`github.com/nooil6152/Qwen38FlashNextGame`**, `main` = that commit plus this docs commit. Older tags: `v0.5` =
+`efb1a78` (pedestrians have their bodies back), `v0.4` = `ffc7f54` (screenshots the right way up), `v0.3` =
+`4d6c83a` (ground following), `v0.2` = `8a36c80` (pedestrians), `v0.1` = `91b4974` (first working build).
+**What `v0.6` is:** it **runs** — that is the bar for a tag here, not correctness. `build.bat Release` compiles with
+clang-cl; `--selftest` = 11 shots + crowd/mesh/ped-mesh/HUD audits, **0 audit faults, 0 GL errors**; interactive =
+60 fps at 120 and 400 walkers, HUD on every frame.
+**Closed:** **ISS-032** (you confirmed it: "that fixed it!") — the bodies were drawn from each box's hinge outward, so
+a walker's head was at ankle height and its legs hung 0.7 m through the road (`addBox()` subtracted the pivot and never
+added it back). **ISS-033** — the HUD flickered: it was GDI text on the window DC after `SwapBuffers`, so it was never
+part of the frame GL presents. **ISS-031** — every BMP was saved vertically mirrored. All three survived audits that
+trusted the code under test, and all three were found the moment an audit measured an output instead. Companion
+document: `LEDGER.md` (work journal, D-1…D-16, ISS-001…ISS-033, V-1…V-13, and **§0a - the prompt log**, which now
+records **every** prompt you send, not just the ones that changed code).
 
 **Work happens in `C:\Source\Qwen38FlashNextGame` — that is the git checkout.** `C:\Source\game` is the *stale copy
 from before the project was moved*: no `.git`, older sources, no `people.*`, no `tools\`. Editing there loses work
@@ -19,11 +21,11 @@ silently. If in doubt, `git -C <path> rev-parse --show-toplevel` before touching
 
 **Next thing to do:** work §0 below, in that order.
 
-## 0. RESUME HERE (written 20:00, both picture defects closed; the crowd is right and you have confirmed it)
+## 0. RESUME HERE (written 21:00, three picture defects closed; crowd and HUD confirmed by measurement)
 
-Checkpoint: **`main` = `efb1a78`** (code), tagged **`v0.5`**, this file + `LEDGER.md` on top, both pushed.
-`bin\Town3D.exe` on disk is built from `efb1a78`: selftest 9 shots, **0 audit faults / 0 GL errors**, worst foot error
-0.000 m, worst body-underground 0.000 m, interactive 60.0 fps with 400 walkers. **Nothing is half-edited.** Start by
+Checkpoint: **`main` = `c305f52`** (code), tagged **`v0.6`**, this file + `LEDGER.md` on top, both pushed.
+`bin\Town3D.exe` on disk is built from `c305f52`: selftest 11 shots, **0 audit faults / 0 GL errors**, worst foot error
+0.000 m, worst body-underground 0.000 m, HUD on 40 of 40 live captures, interactive 60.0 fps with 400 walkers. **Nothing is half-edited.** Start by
 rebuilding to prove the toolchain is still sane: `cmd //c build.bat`.
 
 **Standing rule from you, added after `v0.4`: tag → stop → you check.** Do not start the next piece of code once a
@@ -37,6 +39,7 @@ Three probes, all numeric (this model has no image input, so "look at it" is alw
 cmd //c build.bat                                   # Release + selftest, ~45 s, prints every audit
 node tools/flipcheck.mjs shots/*.bmp                # ISS-031: orientation from the stored bytes
 node tools/peddiff.mjs                              # ISS-032: the pinned walker, measured in pixels
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/hudprobe.ps1 -Frames 40   # ISS-033: is the HUD on screen
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/smoke.ps1 -Seconds 8 -Extra "--peds 400"
 ```
 
@@ -50,6 +53,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/smoke.ps1 -Seconds 8 -
 * shots **08/09** are the same camera twice, one walker pinned 4 m in front of it and then moved out of frame, so
   subtracting the BMPs leaves exactly one body. `tools/peddiff.mjs` reports its pixel bounds; expectations are logged
   by `[pedshot]` (227 px tall at 4 m in a 720 px window, vertical fov 70°, head 8 px above the centre row).
+* shots **10/11** are one frame with the HUD and one without, so the difference can only be the overlay; the selftest
+  faults if that difference is under 500 px (the HUD is not in the framebuffer) or if any of it lands below the top
+  90 px band. `tools/hudprobe.ps1` is the outside view of the same question: it screen-grabs the live client area 40
+  times and counts HUD-band ink per grab, then prints `FLICKERS` / `stable`. Read the numbers in **V-13** before
+  doubting that this class of bug is real - 3 of 40 frames had a HUD before `v0.6`.
 
 **The rule these three encode: an audit may not use the function it is auditing.** Both picture defects survived
 audits that compared a value against the code that wrote it. Write the check against the triangles, the vertex buffer
@@ -93,7 +101,21 @@ debated. (Their capture `manual_26200031.bmp` from 15:18 is the ISS-032 evidence
   `[pedmesh]` audit divides by 324 and would have printed nonsense otherwise.
 - Selftest audit failures and GL errors shared one counter until `v0.5`, so two of my own `error()` faults printed as
   "2 GL errors". They are separate now: `N audit fault(s), M GL errors`.
-- **`powershell -File tools/smoke.ps1` needs `-ExecutionPolicy Bypass`**, or Windows refuses the unsigned script.
+- **GDI text drawn on the window DC after `SwapBuffers` is not in the frame.** With a double-buffered pixel format the
+  visible surface belongs to GL, so the overlay is destroyed by the next swap and only appears on a few frames - that
+  was ISS-033, and `glReadPixels` never saw a line of it either, which is why no screenshot ever had a HUD in it. Any
+  overlay has to be drawn inside the frame. ISS-005 had this written down as a risk since `v0.2`.
+- **Measure the symptom, not the code, when the symptom is temporal.** `git worktree add ..\town3d-v05 v0.5` builds the
+  previous release side by side; the same probe run against both binaries (3 of 40 frames vs 40 of 40) is worth more
+  than any amount of reasoning about drivers and DWM.
+- A glyph atlas needs **`ANTIALIASED_QUALITY`**, not `CLEARTYPE_QUALITY`: ClearType writes subpixel-coloured edges and a
+  one-channel `GL_R8` coverage texture throws the colour away and keeps the fringes.
+- `powershell -File` needs `-ExecutionPolicy Bypass`, or Windows refuses the unsigned script. `Start-Process` in a
+  script started from bash wants an **absolute** `-Exe` path; a relative one fails with an opaque
+  `InvalidOperationException`.
+- Screen capture from PowerShell is `System.Drawing.Graphics.CopyFromScreen` + the client rect from
+  `GetClientRect`/`ClientToScreen`; `GetPixel` in a loop is slow but 900x72 sampled every 2 px is still ~20 grabs/s,
+  which is plenty to alias against a 60 Hz swap.
 - `build.bat` = Release + selftest (~40 s). `tools/smoke.ps1 -Seconds N [-Extra "--peds 400"]` drives the real window.
 - This shell still starts in the stale `C:\Source\game`. `cd /c/Source/Qwen38FlashNextGame` first, always.
 
@@ -121,8 +143,8 @@ user prompt that changed code (git prompts and anything naming the user are excl
 
 ### 0.5 After the picture defects
 
-Both are shut — ISS-031 at `v0.4`, ISS-032 at `v0.5`, the second one confirmed by you ("that fixed it!"). Then, in
-order: ISS-021 night too dark (`gnd` ≈ 5/255, needs the user's taste), ISS-026 crowd has no daily rhythm, ISS-030
+All three are shut — ISS-031 at `v0.4`, ISS-032 at `v0.5` (confirmed by you: "that fixed it!"), ISS-033 at `v0.6`.
+Then, in order: ISS-021 night too dark (`gnd` ≈ 5/255, needs the user's taste), ISS-026 crowd has no daily rhythm, ISS-030
 kerb/deck steps need ramp quads (the swung-toe dip found with ISS-032 is the same class of bug at smaller scale),
 ISS-027 instance the crowd, and the §6 requirement play-test in LEDGER.
 
@@ -154,10 +176,11 @@ First-person walk-around of a procedurally generated low-poly town. OpenGL 3.3 c
 | `src/math3d.h` | 102 | `vec3` has **no** single-float ctor — use `v * s` |
 | `src/people.h/.cpp` | 99/605 | **the crowd**: nav lattice over the street grid, BFS routes, downtown-biased errands, separation steering, hard non-overlap on a 4 m grid, 10-box bodies, `blocks()`/`pushOut()` for the player, `simulate()`/`stats()` for the selftest audit |
 | `src/world.h/.cpp` | 79/730 | town generator; seed 1337 → 330 buildings, 453 trees, 24 lamps, 13 bridges, 845 blockers. Also owns `surfaceAt()` - the only correct answer to "what height is the ground here" |
-| `src/shaders.h` | ~200 | 5 programs; shadow fade `smoothstep(118,158,d)` inside the 165 m ortho radius |
-| `src/main.cpp` | ~1380 | complete: bootstrap, sky, render passes, player (incl. `followGround`), crowd wiring, HUD, BMP, selftest, `main()` |
+| `src/shaders.h` | 230 | 6 programs (the sixth is the HUD, ISS-033); shadow fade `smoothstep(118,158,d)` inside the 165 m ortho radius |
+| `src/main.cpp` | ~1840 | complete: bootstrap, sky, render passes, player (incl. `followGround`), crowd wiring, glyph atlas + HUD pass, BMP, selftest incl. the HUD diff audit, `main()` |
 | `Town3D.vcxproj/.sln`, `build.bat` | — | ClangCL via `-p:UseClang=true`, MSVC `v145` default; Console subsystem |
 | `tools/smoke.ps1` | — | launch/wait/report/kill the real window (needs `-File` invocation; inline `-Command` quoting breaks in bash) |
+| `tools/hudprobe.ps1` | — | ISS-033: screen-grabs the live client area N times, counts HUD-band ink per grab, prints `FLICKERS`/`stable` |
 | `README.md`, `LEDGER.md`, this file | — | docs |
 
 ## 4. Locked-in parameters (don't drift these; they are interdependent)
@@ -207,17 +230,12 @@ Pedestrian parameters (load-bearing):
 
 ## 5. Open work, best-value first
 
-1. **ISS-032.** The mirrored writer (ISS-031) is fixed and measured (`v0.4`), so the first variable is out of the way
-   — and see §0.1: the mirror plausibly caused the whole "sunk walkers" report. Measure with **independent** ground
-   truth, never with the same helper the fix uses:
-   (a) ray-cast `World::solid` for the highest triangle over a grid of street/deck/kerb/block points and compare that
-   with `surfaceAt()` — if they disagree, the picture shows a sunk walker whatever `People::update()` computes;
-   (b) read back the emitted ped vertex range and compare it with the walker's feet and its 1.765 m height — that
-   catches a `addBox`/`toWorld` sign or stride error that `pos.y` audits cannot see;
-   (c) then, and only then, look at a corrected screenshot.
-2. **Human verification (V-5).** The model has no image input, so all verification here is numeric. The user has now
-   looked at it twice and found both of the above, which is the whole reason numeric audits must be independent of
-   the code they are auditing.
+1. **Nothing is broken that anyone has reported.** ISS-031, ISS-032 and ISS-033 are closed and measured, so the next
+   item is a judgement call rather than a defect - start at the top of this list and ask the user which they want.
+2. **Human verification (V-5).** The model has no image input, so every check here is numeric, and the three defects
+   that the user caught by eye (mirrored BMPs, sunken bodies, flickering HUD) were all missed by checks that trusted
+   the code under test. Audit an output the user actually sees: the framebuffer, the vertex buffer, the saved file, or
+   the screen. `§0.1` lists the four probes that do that.
 3. **ISS-021 night is too dark** (`gnd` luma ≈ 5/255). Options in the ledger row; needs the user's taste.
 4. **ISS-026 the crowd has no rhythm** — identical numbers of walkers at midnight and at noon, no rush hour,
    nobody waits to cross. Cheapest version: scale the active count by hour (park the rest in `wait` overnight).

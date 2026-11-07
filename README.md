@@ -18,13 +18,17 @@ quads and pyramids, no textures, no model files, no third-party libraries.
 
 | Tag | Commit | What it is |
 |---|---|---|
-| **`v0.3`** | `4d6c83a` | **current** — adds ground following: walkers stand on the surface instead of 5 cm inside the road, and the player's eye rides decks (`LEDGER.md` ISS-028/029) |
+| **`v0.6`** | `c305f52` | **current** — the HUD is drawn inside the frame, so it stops flickering and turns up in screenshots (`LEDGER.md` ISS-033) |
+| `v0.5` | `efb1a78` | pedestrians have their bodies back: `addBox()` built every box from its own hinge at the feet, so heads sat at ankle height and legs hung through the road (ISS-032) |
+| `v0.4` | `ffc7f54` | screenshots are written the right way up — every BMP on disk was vertically mirrored (ISS-031) |
+| `v0.3` | `4d6c83a` | ground following: walkers stand on the surface instead of 5 cm inside the road, and the player's eye rides decks (ISS-028/029) |
 | `v0.2` | `8a36c80` | pedestrians: they walk the street network, cross at bridges, avoid one another, and are solid to you |
 | `v0.1` | `91b4974` | first working version — town, two rivers and bridges, sun with shadow mapping, clouds, 600 s day/night cycle |
 
-A tag means **this compiles and runs**, not that it is finished or correct: `v0.3` still has two open visual defects
-(mirrored screenshots, walkers that read as sunk) and `LEDGER.md` is the place that says what is broken. Tags are cut
-on every green build, so `git clone -b v0.3` always gets you a build that starts.
+A tag means **this compiles and runs**, not that it is finished or correct: the three visual defects found by eye since
+`v0.3` (mirrored screenshots, walkers with no visible body, a flickering HUD) are all closed, and `LEDGER.md` is the
+place that says what is broken and how each fix was measured. Tags are cut on every green build, so
+`git clone -b v0.6` always gets you a build that starts.
 
 Both are annotated tags carrying a one-line message. They are **unsigned** — no signing key is configured on the
 machine that builds this — so GitHub shows no *Verified* badge; that is expected, not a warning.
@@ -60,11 +64,11 @@ mouse           look            Esc     quit
 T               sun auto-advance on/off
 [  ]            scrub the day clock backwards / forwards
 R               regenerate the town with a new seed
-P               screenshot -> shots\*.bmp
+P               screenshot -> shots\*.bmp (the HUD is drawn in-frame, so it is in the picture)
 H               hide/show the HUD
 ```
 
-The window title bar shows nothing useful on purpose: the HUD overlay in the window carries fps, triangle
+The window title bar shows nothing useful on purpose: the HUD in the top-left of the window carries fps, triangle
 count, position, compass bearing, sun elevation, day clock and seed. Everything also goes to `town3d.log`.
 
 Day length is 600 s. Sun elevation runs from **+69° at noon (clock 150) to −80° at midnight (clock 450)**,
@@ -74,7 +78,7 @@ so the night is genuinely dark, the stars come out and the windows in the buildi
 
 | Flag | Effect |
 |---|---|
-| `--selftest` | Renders 7 fixed views into `shots\*.bmp`, prints frame statistics and a crowd audit, exits |
+| `--selftest` | Renders 11 fixed views into `shots\*.bmp`, prints frame statistics plus crowd, mesh, body and HUD audits, exits |
 | `--seed N` | Town seed (default 1337) — same seed, same town |
 | `--width N` `--height N` | Window size (default 1280x720) |
 | `--clock S` | Start time on the 600 s cycle (default 60) |
@@ -129,11 +133,11 @@ so the night is genuinely dark, the stars come out and the windows in the buildi
 bin\Town3D.exe --selftest
 ```
 
-writes seven BMPs and, for each, a line of measurements — mean luminance, sky-vs-ground luminance, share of
+writes eleven BMPs and, for each, a line of measurements — mean luminance, sky-vs-ground luminance, share of
 near-black and blown pixels, a horizontal-contrast "is there geometry" figure, how many distinct colour
 buckets appear, and how many walkers are within 60 m of that camera. That is what catches a black frame, an
-empty scene or a blown-out sky without anyone having to look at a picture. Current run: 7/7 shots,
-**0 GL errors**.
+empty scene or a blown-out sky without anyone having to look at a picture. Current run: 11/11 shots,
+**0 audit faults, 0 GL errors**.
 
 Before the pictures it also walks the crowd for 180 simulated seconds and audits it:
 
@@ -143,6 +147,16 @@ Before the pictures it also walks the crowd for 180 simulated seconds and audits
 [crowd] walk-through probe: closest approach 0.75 m against a 0.75 m body ok
 [crowd] ground contact: worst foot error 0.000 m | standing on street 108 deck 12 kerb 0 block 0
 [surface] street 0.05  block 0.00  field -0.04  kerb 0.14  deck 0.12 (deck centre 0.12)
+```
+
+After the pictures it audits the two things that screenshots once got wrong, without trusting the code that draws
+them — the triangles the ground is made of, and the vertices the bodies are made of:
+
+```
+[mesh] drawn ground vs surfaceAt: 149 walkable samples, 0 disagree >0.01 m, worst drawn-higher 0.000
+[pedmesh] 120 peds, 324 verts each (108 tris/ped) | worst underground/lift 0.000 m, worst height error 0.000 m
+[pedmesh] mesh y range 0.050 .. 1.885 | lowest ped feet 0.050 | expect sole at feet, hair at feet+1.765
+[hud] overlay vs no overlay: 9314 px changed, ink rows 12..65 from the top, x 18..809, 0 px outside the top 90 px band
 ```
 
 The 12 unusable junctions are exactly the ones standing in open water, `66 crossings` says the routes really do
@@ -155,6 +169,18 @@ lines log the player's own eye height, `1.75` m on a street and `1.82` m on the 
 `tools/smoke.ps1` launches the real window, waits, reports CPU/RSS and kills it — a regression check for
 "does the app still survive its own message loop" (it did not, once: see LEDGER.md ISS-019). Add
 `-Extra "--peds 400"` to stress the crowd: still 60 fps, about 63 000 triangles a frame.
+
+Three more probes live in `tools\`, one per bug class that the numbers inside the program could not see:
+
+```bat
+node tools\flipcheck.mjs shots\*.bmp         :: is a saved BMP the right way up?            (ISS-031)
+node tools\peddiff.mjs                       :: pinned walker minus empty road, in pixels    (ISS-032)
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\hudprobe.ps1 -Frames 40   (ISS-033)
+```
+
+`hudprobe.ps1` looks at the **screen** rather than the framebuffer — it grabs the client area as fast as it can and
+counts HUD-band pixels per grab, then prints `FLICKERS` or `stable`. It is the only check that could see ISS-033, and
+it is how that fix was proven: the HUD was on 3 of 40 frames before the change, 40 of 40 after.
 
 ## Known issues
 
