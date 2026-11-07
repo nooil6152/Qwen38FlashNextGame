@@ -67,6 +67,7 @@ static GLuint g_vaoSolid = 0, g_vboSolid = 0, g_vaoWater = 0, g_vboWater = 0;
 static GLuint g_vaoCloud = 0, g_vboCloud = 0, g_vaoEmpty = 0;
 static GLuint g_vaoPed = 0, g_vboPed = 0;
 static GLuint g_shadowFbo = 0, g_shadowTex = 0;
+static GLuint g_progHud = 0, g_vaoHud = 0, g_vboHud = 0, g_fontTex = 0;   // ISS-033
 static int    g_solidTris = 0, g_waterTris = 0, g_cloudTris = 0;
 
 typedef BOOL(WINAPI* PfnChooseFmt)(HDC, const int*, const float*, UINT, int*, UINT*);
@@ -82,12 +83,22 @@ struct UniDepth { GLint lightVP; };
 struct UniSky { GLint cam, f, r, u, sunDir, sunCol, zenith, horizon, haze, tanHalf, aspect, night; };
 struct UniWater { GLint proj, view, time, cam, sunDir, sunCol, fogCol, fogK; };
 struct UniCloud { GLint proj, view, drift, cam, tint, fogCol, fogK; };
+struct UniHud { GLint scr, off, atlas, rgb, alpha; };
 
 static UniSolid g_uSolid;
 static UniDepth g_uDepth;
 static UniSky g_uSky;
 static UniWater g_uWater;
 static UniCloud g_uCloud;
+static UniHud g_uHud;
+
+// HUD glyph atlas (ISS-033): 95 printable ASCII cells, one byte of coverage
+// each. Built once from GDI so the font still looks like the old one, but it is
+// now drawn inside render() instead of on the window DC after the swap.
+static int g_cellW = 0, g_cellH = 0, g_glyphPad = 1, g_atlasW = 0, g_atlasH = 0;
+static std::vector<float> g_hudVerts;      // x,y,u,v per vertex, window px
+static bool g_hudInShot = false;           // selftest: HUD audit shot only
+static const int kHudBand = 90;            // px from the top: all HUD text lives here
 
 // ---------------------------------------------------------------------------
 // logging: console + town3d.log next to the exe (the console is hidden in
@@ -247,6 +258,12 @@ static void cacheUniforms()
     g_uCloud.tint = U(g_progCloud, "uCloudTint");
     g_uCloud.fogCol = U(g_progCloud, "uFogCol");
     g_uCloud.fogK = U(g_progCloud, "uFogK");
+
+    g_uHud.scr = U(g_progHud, "uScr");
+    g_uHud.off = U(g_progHud, "uOff");
+    g_uHud.atlas = U(g_progHud, "uAtlas");
+    g_uHud.rgb = U(g_progHud, "uRgb");
+    g_uHud.alpha = U(g_progHud, "uAlpha");
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +595,12 @@ static bool initGL(int samples)
     return true;
 }
 
+// The HUD is drawn inside the frame now (ISS-033); its pieces live with the HUD
+// code further down this file, so name them here.
+static void buildFontAtlas();
+static void setupHudGpuObjects();
+static void drawHud(const SkyState& sky);
+
 static void createGpuObjects()
 {
     g_progSolid = makeProgram(VS_SOLID, FS_SOLID, "solid");
@@ -585,8 +608,11 @@ static void createGpuObjects()
     g_progSky = makeProgram(VS_SKY, FS_SKY, "sky");
     g_progWater = makeProgram(VS_WATER, FS_WATER, "water");
     g_progCloud = makeProgram(VS_CLOUD, FS_CLOUD, "cloud");
+    g_progHud = makeProgram(VS_HUD, FS_HUD, "hud");
     cacheUniforms();
     setupMeshGpuObjects();
+    buildFontAtlas();
+    setupHudGpuObjects();
 
     gl.GenTextures(1, &g_shadowTex);
     gl.BindTexture(GL_TEXTURE_2D, g_shadowTex);
@@ -796,6 +822,10 @@ static void render(const SkyState& sky)
     glDisable(GL_BLEND);
     glEnable(GL_CULL_FACE);
     gl.BindVertexArray(0);
+
+    // The HUD is part of the picture now, so it swaps with it (ISS-033). Audit
+    // shots leave it out - except the two that exist to prove it is really here.
+    if (g_hud && (!g_selftest || g_hudInShot)) drawHud(sky);
 }
 
 // ---------------------------------------------------------------------------
@@ -889,15 +919,130 @@ static void tickTime(float dt)
 }
 
 // ---------------------------------------------------------------------------
-// HUD: GDI text drawn on the window DC after SwapBuffers (ISS-005: cosmetic
-// overlay only - deleting the drawHud() call changes nothing else)
+// HUD (ISS-033): screen-space text drawn INSIDE the GL frame.
+//
+// This used to be GDI TextOut on the window DC after SwapBuffers. A
+// double-buffered OpenGL surface owns its own front buffer, so anything GDI
+// painted into that window lived on a different surface and was thrown away by
+// the next swap: the text appeared for part of a frame and vanished for the
+// rest, i.e. it flickered at frame rate - and it was invisible to glReadPixels,
+// so no screenshot ever contained it. The glyph atlas is still built by GDI (so
+// the font is unchanged), but the text is now an ordinary textured quad pass
+// into the back buffer, and therefore swaps with the picture.
 // ---------------------------------------------------------------------------
-static void hudText(HDC dc, int x, int y, const char* s)
+static void buildFontAtlas()
 {
-    SetTextColor(dc, RGB(0, 0, 0));
-    TextOutA(dc, x + 1, y + 1, s, (int)strlen(s));
-    SetTextColor(dc, RGB(246, 246, 236));
-    TextOutA(dc, x, y, s, (int)strlen(s));
+    HFONT font = CreateFontA(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                             FIXED_PITCH | FF_MODERN, "Consolas");
+    HDC win = GetDC(nullptr);
+    HDC mem = CreateCompatibleDC(win);
+    HFONT oldFont = (HFONT)SelectObject(mem, font);
+
+    SIZE adv = { 0, 0 };
+    GetTextExtentPoint32A(mem, "M", 1, &adv);
+    TEXTMETRICA tm;
+    GetTextMetricsA(mem, &tm);
+
+    g_glyphPad = 1;                                  // room for the AA fringe
+    g_cellW = (int)adv.cx + 2 * g_glyphPad;
+    g_cellH = (int)tm.tmHeight + 2 * g_glyphPad;
+    const int cols = 16, rows = 6;                   // 95 printable glyphs (32..126)
+    g_atlasW = cols * g_cellW;
+    g_atlasH = rows * g_cellH;
+
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = g_atlasW;
+    bi.bmiHeader.biHeight = -g_atlasH;               // negative => top-down rows
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP dib = CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HBITMAP oldBmp = (HBITMAP)SelectObject(mem, dib);
+    memset(bits, 0, (size_t)g_atlasW * g_cellH * rows * 4);
+    SetBkMode(mem, OPAQUE);
+    SetBkColor(mem, RGB(0, 0, 0));
+    SetTextColor(mem, RGB(255, 255, 255));
+    for (int c = 32; c < 127; ++c)
+    {
+        const int i = c - 32;
+        const char ch = (char)c;
+        TextOutA(mem, (i % cols) * g_cellW + g_glyphPad, (i / cols) * g_cellH + g_glyphPad, &ch, 1);
+    }
+
+    std::vector<unsigned char> atlas((size_t)g_atlasW * g_atlasH);
+    const unsigned char* px = (const unsigned char*)bits;
+    for (size_t i = 0; i < atlas.size(); ++i) atlas[i] = px[i * 4];   // grey text -> any channel
+
+    gl.GenTextures(1, &g_fontTex);
+    gl.BindTexture(GL_TEXTURE_2D, g_fontTex);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);           // 1-byte coverage rows
+    gl.TexImage2D(GL_TEXTURE_2D, 0, GL_R8, g_atlasW, g_atlasH, 0, GL_RED, GL_UNSIGNED_BYTE, &atlas[0]);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    gl.TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    logfmt("[hud] glyph atlas %dx%d, %dx%d per glyph (Consolas -15 px, advance %d)\n",
+           g_atlasW, g_atlasH, g_cellW, g_cellH, (int)adv.cx);
+
+    SelectObject(mem, oldBmp);
+    DeleteObject(dib);
+    SelectObject(mem, oldFont);
+    DeleteDC(mem);
+    ReleaseDC(nullptr, win);
+    DeleteObject(font);
+}
+
+static void setupHudGpuObjects()
+{
+    gl.GenVertexArrays(1, &g_vaoHud);
+    gl.BindVertexArray(g_vaoHud);
+    gl.GenBuffers(1, &g_vboHud);
+    gl.BindBuffer(GL_ARRAY_BUFFER, g_vboHud);
+    gl.BufferData(GL_ARRAY_BUFFER, 0, nullptr, GL_DYNAMIC_DRAW);   // refilled every frame
+    gl.EnableVertexAttribArray(0);
+    gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (const void*)0);
+    gl.EnableVertexAttribArray(1);
+    gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (const void*)(2 * sizeof(float)));
+    gl.UseProgram(g_progHud);
+    gl.Uniform1i(g_uHud.atlas, 0);
+    gl.BindVertexArray(0);
+}
+
+// One string, top-left anchored in window pixels, appended as two triangles per
+// glyph. Layout pitch is the font advance, so it reads like the GDI version did.
+static void hudText(float x, float y, const char* s)
+{
+    const int cols = 16;
+    const float cw = (float)(g_cellW - 2 * g_glyphPad);      // advance, no padding
+    for (int i = 0; s[i]; ++i)
+    {
+        int c = (unsigned char)s[i];
+        if (c < 32 || c > 126) c = '?';
+        const int g = c - 32;
+        const float u0 = (float)((g % cols) * g_cellW) / (float)g_atlasW;
+        const float v0 = (float)((g / cols) * g_cellH) / (float)g_atlasH;
+        const float du = (float)g_cellW / (float)g_atlasW;
+        const float dv = (float)g_cellH / (float)g_atlasH;
+        const float x0 = x + (float)i * cw - (float)g_glyphPad;
+        const float y0 = y - (float)g_glyphPad;
+        const float x1 = x0 + (float)g_cellW, y1 = y0 + (float)g_cellH;
+        const float q[4][4] = {
+            { x0, y0, u0, v0 }, { x1, y0, u0 + du, v0 }, { x1, y1, u0 + du, v0 + dv },
+            { x0, y1, u0, v0 + dv }
+        };
+        const int order[6] = { 0, 1, 2, 0, 2, 3 };
+        for (int k = 0; k < 6; ++k)
+        {
+            const float* v = q[order[k]];
+            g_hudVerts.push_back(v[0]); g_hudVerts.push_back(v[1]);
+            g_hudVerts.push_back(v[2]); g_hudVerts.push_back(v[3]);
+        }
+    }
 }
 
 static const char* compass(float yaw)
@@ -910,14 +1055,7 @@ static const char* compass(float yaw)
 
 static void drawHud(const SkyState& sky)
 {
-    static HFONT font = nullptr;
-    if (!font)
-        font = CreateFontA(-15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                           OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                           FIXED_PITCH | FF_MODERN, "Consolas");
-    HDC dc = GetDC(g_hwnd);
-    HFONT old = (HFONT)SelectObject(dc, font);
-    SetBkMode(dc, TRANSPARENT);
+    g_hudVerts.clear();
 
     char line[320];
     const int deg = (int)(sky.elevation * 180.0f / kPi);
@@ -928,18 +1066,49 @@ static void drawHud(const SkyState& sky)
     sprintf(line, " Town3D   %5.1f fps   %7d tris   %dx%d   MSAA %d   shadow %dx%d ",
             (double)g_fps, g_solidTris + g_waterTris + g_cloudTris + g_pedTris, g_w, g_h, (int)g_msaa,
             SHADOW_RES, SHADOW_RES);
-    hudText(dc, 10, 8, line);
+    hudText(10.0f, 8.0f, line);
     sprintf(line, " pos %8.1f %8.1f   facing %-2s (%3d)   sun %3d deg %-9s  clock %5.1f  seed %u  peds %d ",
             (double)g_pos.x, (double)g_pos.z, compass(g_yaw), bearing, deg, phase,
             (double)g_clock, g_seed, (int)g_people.peds.size());
-    hudText(dc, 10, 28, line);
+    hudText(10.0f, 28.0f, line);
     sprintf(line, " WASD move   Shift run   mouse look   T sun %s   [ ] time   R new town   P shot   H hud   Esc quit ",
             g_sunAnim ? "AUTO" : "HELD");
-    hudText(dc, 10, 48, line);
-    if (!g_shadowsOn) hudText(dc, 10, 68, " SHADOWS OFF (debug) ");
+    hudText(10.0f, 48.0f, line);
+    if (!g_shadowsOn) hudText(10.0f, 68.0f, " SHADOWS OFF (debug) ");
 
-    SelectObject(dc, old);
-    ReleaseDC(g_hwnd, dc);
+    if (g_hudVerts.empty()) return;
+    const GLsizei nv = (GLsizei)g_hudVerts.size() / 4;
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);        // the shader writes premultiplied
+    gl.UseProgram(g_progHud);
+    gl.Uniform2f(g_uHud.scr, (float)g_w, (float)g_h);
+    gl.ActiveTexture(GL_TEXTURE0);
+    gl.BindTexture(GL_TEXTURE_2D, g_fontTex);
+    gl.Uniform1i(g_uHud.atlas, 0);
+    gl.BindVertexArray(g_vaoHud);
+    gl.BindBuffer(GL_ARRAY_BUFFER, g_vboHud);
+    gl.BufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_hudVerts.size() * sizeof(float)), &g_hudVerts[0],
+                  GL_DYNAMIC_DRAW);
+
+    gl.Uniform2f(g_uHud.off, 1.0f, 1.0f);               // drop outline, as the GDI version had
+    gl.Uniform3f(g_uHud.rgb, 0.0f, 0.0f, 0.0f);
+    gl.Uniform1f(g_uHud.alpha, 0.85f);
+    gl.DrawArrays(GL_TRIANGLES, 0, nv);
+
+    gl.Uniform2f(g_uHud.off, 0.0f, 0.0f);
+    gl.Uniform3f(g_uHud.rgb, 246.0f / 255.0f, 246.0f / 255.0f, 236.0f / 255.0f);
+    gl.Uniform1f(g_uHud.alpha, 1.0f);
+    gl.DrawArrays(GL_TRIANGLES, 0, nv);
+
+    glDisable(GL_BLEND);                                // hand the frame back as we found it
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    gl.BindVertexArray(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,7 +1181,7 @@ static void analyzeFrame(const std::vector<unsigned char>& img, int w, int h)
     g_lastLuma = s.luma;
 }
 
-static bool captureBmp(const char* path)
+static bool captureBmp(const char* path, std::vector<unsigned char>* outRgb = nullptr)
 {
     const int w = g_w, h = g_h;
     std::vector<unsigned char> img((size_t)w * h * 3);
@@ -1025,6 +1194,7 @@ static bool captureBmp(const char* path)
         acc += 0.2126 * img[i] + 0.7152 * img[i + 1] + 0.0722 * img[i + 2];
     g_lastLuma = acc / (double)((size_t)w * h);
     analyzeFrame(img, w, h);
+    if (outRgb) *outRgb = img;                     // GL order: row 0 is the screen bottom
 
     const int row = ((w * 3 + 3) / 4) * 4;
     std::vector<unsigned char> out((size_t)row * h, 0);
@@ -1137,7 +1307,7 @@ static int runSelfTest()
     CreateDirectoryA("shots", nullptr);
     const vec3 core(0.0f, 0.0f, 0.0f);
     const float riverH = corline(TW_RIVER_H) + TW_ROAD * 0.5f;   // -77
-    Shot shots[9];
+    Shot shots[11];
     int n = 0;
     shots[n] = { "01_downtown_street", corline(4) + 7.0f, corline(6) + 7.0f,
                  yawToward(vec3(corline(4) + 7.0f, 0, corline(6) + 7.0f), core), 0.05f, 60.0f }; ++n;
@@ -1412,6 +1582,16 @@ static int runSelfTest()
                    (eye - pin.pos.y) / metresPerPx);
         }
     }
+
+    // 10/11: one frame with the HUD, one without, everything else identical. The
+    // only thing that can differ between the two files is the overlay itself, so
+    // this measures "is the HUD really inside the picture" (ISS-033). It could
+    // not have: the old GDI overlay was painted after SwapBuffers and never
+    // reached glReadPixels, which is exactly why it flickered.
+    shots[n] = { "10_hud_on",  g_world.spawn.x, g_world.spawn.z, g_world.spawnYaw, 0.0f, 60.0f }; ++n;
+    shots[n] = { "11_hud_off", g_world.spawn.x, g_world.spawn.z, g_world.spawnYaw, 0.0f, 60.0f }; ++n;
+
+    std::vector<unsigned char> prevShot;
     for (int i = 0; i < n; ++i)
     {
         g_clock = shots[i].clock;
@@ -1433,7 +1613,11 @@ static int runSelfTest()
 
         SkyState sky;
         skyFor(g_clock, sky);
+        // Only the HUD audit shot draws the overlay; every other shot stays clean
+        // so the luma bands and the 08/09 body diff keep their meaning.
+        g_hudInShot = (strstr(shots[i].name, "10_hud") != nullptr);
         render(sky);
+        g_hudInShot = false;
         glErr += drainGlErrors(shots[i].name);
 
         // how much crowd is actually in this frame?
@@ -1447,7 +1631,8 @@ static int runSelfTest()
 
         char path[256];
         sprintf(path, "shots/%s.bmp", shots[i].name);
-        const bool saved = captureBmp(path);
+        std::vector<unsigned char> rgb;
+        const bool saved = captureBmp(path, &rgb);
         logfmt("[shot] %-20s luma %6.1f  sky %6.1f gnd %6.1f  dark %5.1f%%  blown %4.2f%%  "
                "detail %5.2f  chroma %4.1f  colors %4d\n",
                shots[i].name, g_stats.luma, g_stats.skyLuma, g_stats.gndLuma, g_stats.dark,
@@ -1456,6 +1641,52 @@ static int runSelfTest()
                sky.elevation * 180.0f / kPi, sky.night, (double)g_clock,
                g_world.blockedAt(g_pos.x, g_pos.z) ? 1 : 0, g_pos.y, g_pedTris, nearPeds,
                g_people.peds.empty() ? 0.0f : nearD, saved ? "saved" : "FAILED");
+
+        // ---- audit (c): is the overlay inside the frame that gets swapped?
+        // Shot 11 is shot 10 with the HUD switched off, so any pixel that differs
+        // is HUD ink. Zero difference means the HUD is not in the framebuffer at
+        // all - the ISS-033 failure, which is what "the HUD flickers" looked like:
+        // GDI painted it onto the window after the swap, the next swap discarded
+        // it, and glReadPixels never saw a line of it.
+        if (strstr(shots[i].name, "11_hud_off") != nullptr && !prevShot.empty() && rgb.size() == prevShot.size())
+        {
+            const int w = g_w, h = g_h;
+            long changed = 0, outside = 0;
+            int minX = w, maxX = -1, minTop = h, maxTop = -1;
+            for (int y = 0; y < h; ++y)
+            {
+                const int yTop = h - 1 - y;              // img row 0 is the screen bottom
+                for (int x = 0; x < w; ++x)
+                {
+                    const size_t p = ((size_t)y * w + x) * 3;
+                    if (rgb[p] == prevShot[p] && rgb[p + 1] == prevShot[p + 1] && rgb[p + 2] == prevShot[p + 2])
+                        continue;
+                    ++changed;
+                    if (yTop >= kHudBand) ++outside;
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (yTop < minTop) minTop = yTop;
+                    if (yTop > maxTop) maxTop = yTop;
+                }
+            }
+            logfmt("[hud] overlay vs no overlay: %ld px changed, ink rows %d..%d from the top, "
+                   "x %d..%d, %ld px outside the top %d px band\n",
+                   changed, minTop, maxTop, minX, maxX, outside, kHudBand);
+            if (changed < 500)
+            {
+                ++errors;
+                logfmt("[hud] FAULT (ISS-033): the HUD is not being drawn into the frame "
+                       "(%ld px differ); anything painted on the window DC outside the "
+                       "back buffer will flicker\n", changed);
+            }
+            else if (outside)
+            {
+                ++errors;
+                logfmt("[hud] FAULT (ISS-033): overlay ink reached row %d from the top, "
+                       "past the %d px band it lives in\n", maxTop, kHudBand);
+            }
+        }
+        prevShot.swap(rgb);
     }
     logfmt("[selftest] done, %d shots, %d audit fault(s), %d GL errors\n", n, errors, glErr);
     return errors ? 2 : 0;
@@ -1585,7 +1816,6 @@ int main(int argc, char** argv)
         }
 
         SwapBuffers(g_hdc);
-        if (g_hud) drawHud(sky);
 
         fpsAcc += dt;
         ++fpsFrames;

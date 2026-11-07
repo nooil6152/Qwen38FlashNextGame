@@ -196,3 +196,35 @@ static const char* FS_CLOUD = "#version 330 core\n"
 "  if (a < 0.01) discard;\n"
 "  oCol = vec4(mix(col, uFogCol, 0.25), a);\n"
 "}\n";
+
+// ---------------------------------------------------------------------------
+// HUD (ISS-033): screen-space text quads from a GDI-built glyph atlas, drawn
+// into the GL back buffer inside render(). This used to be GDI TextOut on the
+// window DC *after* SwapBuffers - a double-buffered GL surface owns its front
+// buffer, so that overlay was destroyed by the next swap and the text flashed
+// at frame rate. Positions arrive in window pixels (origin top-left); premul
+// alpha so the glyph edges blend cleanly over anything in the scene.
+// ---------------------------------------------------------------------------
+static const char* VS_HUD = "#version 330 core\n"
+"layout(location=0) in vec2 aPx;\n"
+"layout(location=1) in vec2 aUv;\n"
+"uniform vec2 uScr;\n"
+"uniform vec2 uOff;\n"
+"out vec2 vUv;\n"
+"void main(){\n"
+"  vec2 p = (aPx + uOff) / uScr;\n"
+"  gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);\n"
+"  vUv = aUv;\n"
+"}\n";
+
+static const char* FS_HUD = "#version 330 core\n"
+"in vec2 vUv;\n"
+"uniform sampler2D uAtlas;\n"
+"uniform vec3 uRgb;\n"
+"uniform float uAlpha;\n"
+"out vec4 oCol;\n"
+"void main(){\n"
+"  float cov = texture(uAtlas, vUv).r * uAlpha;\n"
+"  if (cov < 0.01) discard;\n"
+"  oCol = vec4(uRgb * cov, cov);\n"
+"}\n";
