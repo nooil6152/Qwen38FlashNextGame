@@ -2,6 +2,8 @@
 
 Walk around the town - created entirely by Qwen 3,8 Flash Next.
 
+Repo: <https://github.com/nooil6152/Qwen38FlashNextGame> · Windows · Win32 + OpenGL 3.3 core · no external dependencies
+
 A first-person walk-around of a procedurally generated town: streets, houses down to
 skyscrapers, two rivers with bridges you can actually cross, a moving sun with
 shadow mapping, and drifting clouds. Low-poly by design — everything is boxes,

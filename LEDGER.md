@@ -73,6 +73,25 @@ Newest last. "Verification" is what I actually ran, not what should work.
 | 13 | 10:38 | `build.bat` | done | `vswhere` → MSBuild, then **detects `clang-cl.exe`** and passes `-p:UseClang=true` when present, printing VS-Installer instructions when it is not. Args: `build.bat [Debug\|Release] [--run]`; default = Release + `--selftest`. | — |
 | 14 | 10:40–11:20 | first compile → first frame | 5 fixes | Compile/link clean on the 4th pass, then four runtime failures diagnosed one at a time against the real AMD driver: no 3.x context (ISS-014), version query returning 0.0 (ISS-015), app quitting before frame 1 (ISS-016), sun never setting (ISS-017). | ISS-014…ISS-017 |
 | 15 | 11:25 | `tools/smoke.ps1` | done | Launches the real window, waits, reports alive/dead + CPU + RSS, kills it. Turns "it runs" into a repeatable check (V-3). | — |
+| 16 | 12:25 | GitHub push | done | Repo moved to `C:\Source\Qwen38FlashNextGame` and `main` pushed to **`github.com/nooil6152/Qwen38FlashNextGame`** (`540c035`, 15 files, +2 991 lines): all of `src/`, solution/project/build scripts, `tools/smoke.ps1`, and the three documents. Kept out: `shots/*.bmp` (16 MB — new `*.bmp` ignore rule, regenerable with `--selftest`) and, as before, `bin/`, `obj/`, `town3d.log`. Commit **author and committer are both the repo account**; checked through the GitHub API afterwards — correct authorship on the served commit, zero build artefacts or screenshots in the tree, and no personal names, mail addresses or local user-directory paths in any tracked file at any revision. | — |
+
+### 3a. Identity hygiene on the push
+
+This repo's owner account is **not** the account this machine is set up for: the global
+git identity, the active `gh` login and the cached Git Credential Manager entries all
+belong to a different GitHub user. Nothing from that account reached the repo:
+
+- `user.name` / `user.email` were set **repo-locally only** — global config untouched;
+- `origin` is pinned as `https://nooil6152@github.com/…` so a cached credential for the
+  other account can no longer match the remote and be used silently;
+- the device-flow login ran in a throwaway `GH_CONFIG_DIR`, so the existing `gh` session
+  was never replaced or made inactive;
+- the push itself used a one-shot `credential.helper` reading an environment variable —
+  the token never entered a remote URL, a command line, `.git/config` or global config.
+
+Left behind, and removable: a `gh:github.com:nooil6152` entry in Windows Credential
+Manager, and the throwaway config directory (`GH_CONFIG_DIR=<dir> gh auth logout
+--hostname github.com`, then delete the directory).
 
 ---
 
