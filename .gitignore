@@ -426,3 +426,7 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# Rendered screenshots: regenerate with  bin\Town3D.exe --selftest
+# (16 MB of BMPs, derived data - not worth versioning)
+shots/*.bmp
