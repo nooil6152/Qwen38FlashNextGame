@@ -10,12 +10,19 @@ Brief (verbatim requirements):
 > Rivers with crossable bridges. Low detail everywhere. Sun in the sky that casts
 > shadows. Also clouds.
 
-**Status at last save:** **builds and runs.** All 7 source files plus `Town3D.sln` / `Town3D.vcxproj` / `build.bat` are
-on disk; `build.bat Release` compiles with **clang-cl (ClangCL)** and links `bin\Town3D.exe`. `--selftest` renders 6
-preset views to `shots\*.bmp` with **0 GL errors**; the interactive window runs at a vsync-locked **60.0 fps** at
-1280x720 (19 942 tris drawn/frame). Runtime bugs found and fixed in this pass are ISS-013…ISS-017. Not yet verified by
-a human: how the pictures actually *look* (the model has no image input, so verification is numeric — see §5).
-Remaining polish: `README.md`, night brightness, ISS-012, ISS-018. Details in [`CONTINUE.md`](CONTINUE.md).
+Later request (2026-11-07, after `v0.1`):
+> Add people walking round the town, crossing bridges, avoiding each other. They don't
+> need to interact with me, but I should not be able to walk through them. Also, they
+> should not walk through each other. Simple minecraft type solid blocks for limbs and
+> heads will suffice.
+
+**Status at last save:** **builds and runs, with pedestrians.** All 9 source files plus `Town3D.sln` / `Town3D.vcxproj` /
+`build.bat` are on disk; `build.bat Release` compiles with **clang-cl (ClangCL)** and links `bin\Town3D.exe`.
+`--selftest` renders 7 preset views to `shots\*.bmp` with **0 GL errors** and now also audits the crowd
+(routing, bridge crossings, overlaps, walk-through probe). The interactive window runs at a vsync-locked **60.0 fps**
+at 1280x720 — 32 902 tris/frame with 120 walkers, 63 142 with 400. `v0.1` (pre-pedestrian) is tagged and pushed.
+Not yet verified by a human: how the pictures actually *look* (the model has no image input, so verification is
+numeric — see §5). Remaining polish: night brightness (ISS-021), ISS-012, ISS-018, ISS-023. Details in [`CONTINUE.md`](CONTINUE.md).
 
 Legend — status: `done` `in-progress` `planned` `blocked` · severity: `high` `med` `low` `info`
 
@@ -49,6 +56,11 @@ Legend — status: `done` `in-progress` `planned` `blocked` · severity: `high` 
 | D-8 | Sky = full-screen triangle (gradient + sun disc + glow + stars), clouds = soft alpha quads (lit top / shaded underside), drifting and drawn in 3 tiled copies | Clouds wrap seamlessly without per-vertex `mod()` tearing; alpha fades with distance so the field edge is invisible. |
 | D-9 | Toolset `ClangCL` (as the brief asks) with `build.bat` probing for `clang-cl.exe`; `v145` MSVC only as an explicit fallback | The brief says Clang, and clang-cl is installed here, so the shipped build *is* Clang. MSVC stays supported because a second machine may not have the component — both compile clean from the same sources. |
 | D-10 | `--selftest` renders preset cameras to `.bmp` via `glReadPixels` | Gives *visual proof* the renderer works in a head-ish environment and lets me verify the town/shadows/clouds instead of assuming. |
+| D-11 | Pedestrians navigate a **graph of street intersections** (13×13 nodes, 4-neighbour links), never a free 2D plane. Links across a river exist **only** where a bridge deck is, and a node is excluded if `World::blockedAt()` says it is occupied. Routes come from BFS. | A steering-only crowd wanders into the river and drowns on a railing. On the lattice, water is simply *not connected*, so a walker crosses at a bridge or not at all — no special-case "bridge" code to get wrong. Reusing `blockedAt()` means lamp posts and trees block pedestrians for free, exactly as they block the player. |
+| D-12 | Bodies are 10 boxes each (torso, head, hair, 2 arms, 2 legs, 2 shoes) emitted into **one dynamic VBO in the same vertex format as the town**, drawn with the existing `solid` program in both the shadow and colour passes | Zero new shaders: bodies get lighting, fog, shadow mapping and procedural shading for nothing, and they cast real shadows. Minecraft-style blocks are what the request asked for. 108 tris per person is nothing next to the town's 19 942. |
+| D-13 | Three layers instead of one: **steering** (soft avoidance: they edge round each other) → **hard non-overlap** (3 relaxation passes, symmetric push, axis-separated so nobody is shoved through a wall) → **player as immovable** (a walker always yields to you, never the reverse) | Soft forces alone let bodies touch at walking pace; a pure "push out" every frame looks magnetic. Splitting them means *nobody ever shares space* is a guarantee from the last pass, while normal walking still looks like walking. |
+| D-14 | Broad phase = uniform **4 m hash grid rebuilt each frame** (linked-list buckets), so avoidance and overlap tests look at 9 cells, not the whole crowd | 400 walkers at O(n²) is 160 000 pair tests a frame for no reason. With the grid the frame stays vsync-locked; measured 60.0 fps at 400 walkers (`[perf]`, §5 V-8). |
+| D-15 | Destinations are chosen from ~10 candidate junctions scored by *distance from the town centre + up to 420 m of chance*, minimum 4 hops away | A purely random target spreads 120 walkers so thinly over a 728 m town that a street is empty half the time. Biasing downtown (with plenty of slack) puts crowds where the buildings are, which is where a town looks populated. |
 
 ---
 
@@ -74,6 +86,10 @@ Newest last. "Verification" is what I actually ran, not what should work.
 | 14 | 10:40–11:20 | first compile → first frame | 5 fixes | Compile/link clean on the 4th pass, then four runtime failures diagnosed one at a time against the real AMD driver: no 3.x context (ISS-014), version query returning 0.0 (ISS-015), app quitting before frame 1 (ISS-016), sun never setting (ISS-017). | ISS-014…ISS-017 |
 | 15 | 11:25 | `tools/smoke.ps1` | done | Launches the real window, waits, reports alive/dead + CPU + RSS, kills it. Turns "it runs" into a repeatable check (V-3). | — |
 | 16 | 12:25 | GitHub push | done | Repo moved to `C:\Source\Qwen38FlashNextGame` and `main` pushed to **`github.com/nooil6152/Qwen38FlashNextGame`** (`540c035`, 15 files, +2 991 lines): all of `src/`, solution/project/build scripts, `tools/smoke.ps1`, and the three documents. Kept out: `shots/*.bmp` (16 MB — new `*.bmp` ignore rule, regenerable with `--selftest`) and, as before, `bin/`, `obj/`, `town3d.log`. Commit **author and committer are both the repo account**; checked through the GitHub API afterwards — correct authorship on the served commit, zero build artefacts or screenshots in the tree, and no personal names, mail addresses or local user-directory paths in any tracked file at any revision. | — |
+| 17 | 12:36 | pre-flight before feature work | done | Confirmed `v0.1` was safely public *before* editing anything: `main` == `origin/main` == `91b4974`, annotated tag `v0.1` ("first working version") present on the remote, working tree clean. An unrelated `strata-config.json` appeared in the folder — left untracked; from here on `git add` takes **explicit paths** so it cannot be swept into a public commit. | — |
+| 18 | 12:39–12:56 | `src/people.h`, `src/people.cpp` | done | New module, 578 lines. Navigation lattice over the street grid (walkability derived from bridge positions **plus** `blockedAt()`), BFS routes, downtown-biased destinations, steering + hard separation, `emit()` builds the blocky bodies, `blocks()`/`pushOut()` make them solid to the player, `simulate()`/`stats()` exist so the selftest can audit the crowd without a window. | D-11…D-15 |
+| 19 | 13:05–13:20 | wire into engine | done | `main.cpp`: crowd built with the town (and on `R` regenerate), own dynamic VBO, drawn in the depth **and** colour passes, `playerFreeAt()` now refuses both walls *and* bodies, HUD shows walker count, `--peds N` (default 120, 0 disables), new shot `07_crowd_street` framed on the busiest corner, `Town3D.vcxproj` lists the new files. | — |
+| 20 | 13:10–13:30 | verification | done | Two bugs caught while building (ISS-023 `near` is a `windows.h` macro; ISS-024 my clamp statements cut the `else if` argument chain). Selftest: 157/169 junctions walkable (the 12 missing are exactly the ones standing in open water), 66 river crossings in 180 simulated seconds, **0 overlaps / 0 in walls / 0 in water**, walk-through probe stops at 0.75 m. Interactive: 60.0 fps at 120 and at 400 walkers. | ISS-023, ISS-024, V-7, V-8 |
 
 ### 3a. Identity hygiene on the push
 
@@ -118,6 +134,11 @@ What is wrong / risky, with current state. Nothing here is hypothetical hand-wav
 | ISS-017 | **high** | `main.cpp` wgl bootstrap | `wglGetProcAddress` only answers **while a context is current**. `wglCreateContextAttribsARB` was fetched after the bootstrap context had been deleted → NULL → “ancient driver?” and no 3.x context on a current AMD card. | **closed** | Pointer now grabbed together with `wglChoosePixelFormatARB` while the 1×1 bootstrap context is still current; plus a throwaway-context fallback for the `--nomsaa` path that never creates the dummy. Evidence: `[gl] context 3.3 … AMD Radeon RX 9070 XT \| MSAA 4`. |
 | ISS-018 | med | `main.cpp` init | `GL_MAJOR_VERSION`/`GL_MINOR_VERSION` read back as `0.0` through **both** the `opengl32.lib` import and the `wglGetProcAddress` pointer on this AMD driver (with `GL_INVALID_ENUM` pending), although the context really is 3.3 core — so the version guard aborted init on a working context. | **closed** (worked around) | Init now takes `GL_MAJOR_VERSION` if the driver answers it, otherwise parses `glGetString(GL_VERSION)` (“3.3.0 Core Profile Context …”). The pending error is consumed by the log line so it cannot masquerade as a later failure. Kept as *known driver oddity*, not a code bug. |
 | ISS-019 | **high** | `main.cpp` `wndProc` | The hidden 1×1 window that bootstraps `wglChoosePixelFormatARB` shares `wndProc` with the game window. Its `WM_DESTROY` ran `PostQuitMessage(0)`, so the message loop quit **before the first frame**: `[win] WM_DESTROY` … `[exit] loop ended after 0 frames`. | **closed** | Only the real window (`h == g_hwnd`) may end the app; the bootstrap window’s `WM_DESTROY` returns 0. Found by adding `--trace` plus a frame counter to the exit log — the frame count is what made it obvious nothing had ever drawn. |
+| ISS-023 | low | `main.cpp` selftest | `int near = 0;` inside the crowd framing code failed to compile with "expected unqualified-id" — `near` (and `far`) are macros defined by `windows.h`, so the declaration evaporated. | **closed** | Renamed to `nearby`. Worth remembering: any local in a file that includes `windows.h` must avoid `near`, `far`, `small`, `large`, `interface`, `getStatus`. |
+| ISS-024 | med | `main.cpp` `main()` | While adding `--peds` I put the two clamp statements (`if (g_pedCount < 0) …`) **between** links of the argument `else if` chain. That split the chain, so almost every flag fell through to `else printf("ignoring argument …")` — the log had been printing `ignoring argument '--selftest'` on every run since the flag was added. Values were still assigned, so behaviour looked fine and only the noise gave it away. | **closed** | Clamping moved after the loop; `--peds 0` now runs a 6-shot selftest with `pedtris 0` and no "ignoring" line anywhere (regression-checked in §5 V-7). Lesson: an `--help`/unknown-argument message is a test — read it, do not scroll past it. |
+| ISS-025 | info | `people.cpp` | Pedestrians reuse `World::blockedAt()`, which tests a circle of `TW_PLAYER_R` = 0.45 m, while a walker's own radius is 0.30 m. | accepted | Deliberate: the stricter test means a walker never ends up wedged where the player would later be unable to pass. Costs a little clearance on the 15.2 m bridge decks and 14 m streets, which is not observable. |
+| ISS-026 | med | crowd behaviour | Walkers are oblivious to the time of day: 400 people stroll the streets at midnight, and there is no rush hour, no crossing-wait, no benches. Nothing "lives" beyond walking a route. | **open** | Cheap fixes if wanted: scale the walker count by hour of day (recycle some into `wait` at night), and weight destinations toward whatever district is awake. Left out of this pass because the request was movement and solidity, not schedules. |
+| ISS-027 | low | crowd rendering | Every walker is transformed on the CPU (10 boxes × 6 verts) and re-uploaded each frame, so the crowd costs ~13 k tris of vertex traffic at 120 walkers. | **open** — headroom | Fine at present (60.0 fps at 400 walkers, 1.7 s CPU over 12 s wall). If it ever matters: instanced drawing with a per-ped model matrix, or a walk/idle animation baked per-variant. Not worth the complexity at this scale. |
 | ISS-021 | med | night look | Ground luminance at dusk/night is ~5/255 (`dark` 43–48 % of pixels): buildings read as silhouettes and only the lit windows carry the picture. Lifted once already (ISS-020) but still dark. | **open** — cosmetic | Options, cheapest first: (a) raise `ambNight`/`gndNight` again, (b) give the 24 lamp posts a real point light or a baked ground pool of light, (c) brighten the window-glow term so lit windows bloom onto façades, (d) accept it as mood. Needs a human call on how dark “night” should be. |
 | ISS-022 | low | `world.cpp` water | The two rivers are 6 triangles in total (one quad each). Ripples still show because `FS_WATER` computes its normal per fragment, but the vertex-level displacement is interpolated flat and there is no shoreline detail. | **open** — cosmetic | If real wave geometry is wanted, emit a ~6 m grid per river (≈1.4 k tris) instead of 2 quads. Deliberately not done yet: it costs nothing to change later and buys nothing visible at eye height 1.7 m. |
 | ISS-020 | med | `main.cpp` `skyFor()` | Sun elevation was `0.12 + 1.15·max(0, sin(az))`: the `max` clamp parked the sun 7° above the horizon all night — a “night” sky with a sun disc on it, no stars, and midnight *brighter* than dusk (ground luma 4.1 both). | **closed** | Elevation is now `1.30·sin(az) − 0.10` → +69° at noon, **−80° at midnight**; sun intensity floors at 0 below the horizon; night/dusk ambient lifted (still dark, see ISS-021). Selftest now logs sun −80.2° / night 1.00 at clock 450. |
@@ -128,8 +149,9 @@ What is wrong / risky, with current state. Nothing here is hypothetical hand-wav
 
 ## 5. Verification log
 
-Built and run on 2026-11-07. Instruments: `town3d.log` (every init step + per-shot frame statistics), `--selftest`
-(6 fixed cameras → `shots\*.bmp`), `tools/smoke.ps1` (launch/kill the real window).
+Built and run on 2026-11-07. Instruments: `town3d.log` (every init step + per-shot frame statistics), `--selftest` (7
+fixed cameras → `shots\*.bmp`, plus a crowd audit), `tools/smoke.ps1` (launch/kill the real window, `-Extra "--peds 400"`
+to stress it).
 
 | ID | What | Result |
 |---|---|---|
@@ -140,7 +162,10 @@ Built and run on 2026-11-07. Instruments: `town3d.log` (every init step + per-sh
 | V-3 | `blockedAt()` at all 6 shot positions | **0 = free** in all 6 — including the bridge-deck shot, which is the case that used to be wrong (water exemption swallows the deck). |
 | V-4 | Interactive window (`tools/smoke.ps1`) | **alive after 7 s**, 98.9 MB RSS, killed cleanly; `[perf] frame 240 60.0 fps` (vsync-locked) at 1280x720 with 19 942 tris/frame; day clock advanced 60.0 → 63.9 so `tickTime` runs. |
 | V-5 | Play-test by a human — *does it look right*, can you walk into a house, are the bridges the only crossings, do the shadows track the sun | **not done — needs your eyes.** The numbers prove pixels and geometry; they cannot prove the town looks like a town. |
-| V-6 | Debug aids available | `--trace` (Win32 message traffic + a perf line every 240 frames), `--noshadows` (A/B the shadow pass), `--nomsaa`, `--seed N`, `--clock S`, `P` = screenshot mid-game. |
+| V-6 | Debug aids available | `--trace` (Win32 message traffic + a perf line every 240 frames), `--noshadows` (A/B the shadow pass), `--nomsaa`, `--seed N`, `--clock S`, `--peds N`, `P` = screenshot mid-game. |
+| V-7 | Crowd audit inside `--selftest` (180 s of simulated walking, then measured) | **157/169 junctions walkable** — the 12 excluded are precisely the nodes standing in open water, which is the nav graph saying *the river is not walkable except on a bridge*. **66 river crossings** by 120 walkers, so routes really do use the bridges. **0 overlapping pairs, 0 inside walls, 0 in water** ⇒ nobody walks through each other or falls in. **Walk-through probe:** player pushed straight at a held-still walker for 300 steps gets no closer than **0.75 m**, exactly the sum of the body radius (0.30) and the player radius (0.45) ⇒ you cannot walk through a person. `--peds 0` gives 6 shots and `pedtris 0`, and no `ignoring argument` line anywhere (ISS-024 regression check). |
+| V-8 | Crowd cost (interactive, `tools/smoke.ps1`) | 120 walkers: **60.0 fps**, 32 902 tris/frame, 115 MB, 0.78 s CPU over 9 s wall. 400 walkers (`--peds 400`): **60.0 fps**, 63 142 tris/frame, 118 MB, 1.66 s CPU over 12 s. Still vsync-locked, so the crowd is not the bottleneck. Shot 07 in-frame numbers: 12 960 ped tris drawn, 14 walkers within 60 m, nearest 3.9 m. |
+| V-9 | Crowd visible in the pictures, A/B | Same fixed camera, crowd off then on. River-and-skyline shot: ground-band luma 19.0 → 19.7, detail 1.95 → 2.01, distinct colours 374 → 407. Downtown street: colours 361 → 372. Small but unambiguous change at ground level only — consistent with people being drawn, not with a global lighting shift. |
 
 ---
 
@@ -148,13 +173,19 @@ Built and run on 2026-11-07. Instruments: `town3d.log` (every init step + per-sh
 
 | Requirement | Where it is implemented | State |
 |---|---|---|
-| OpenGL + VS C++ (Clang) | `Town3D.vcxproj` (`ClangCL` default), `src/gl_core.*` | project files pending; ISS-001 |
-| Humanoid player, WASD | `main.cpp` movement/collision (eye height 1.7 m, walk/run) | pending |
-| Mouse look | raw input (`WM_INPUT`) yaw/pitch, pitch clamped | pending |
-| Town of rectangular buildings, houses → very tall blocks | `world.cpp` districts: core towers ~75–150 m, mid 16–55 m, suburbs 6–13 m houses (hip roofs) | generator in progress |
-| Town centre = skyscrapers | height/density by distance from (0,0); setbacks + antennas in the core | generator in progress |
-| Cannot enter buildings | every footprint pushed into `World::blockers`, per-axis AABB test → impossible to pass a wall | pending (design D-4/D-5) |
-| Rivers with crossable bridges | two rivers on widened street corridors; bridges at alternating streets with decks, railings (solid) and `bridgeZones` walk exceptions | pending (design D-6) |
-| Low detail | boxes + flat colours + a handful of quads; no textures, no meshes loaded | by design |
-| Sun in the sky casting shadows | sun disc + glow in sky shader; shadow-map pass; animated time-of-day, T/[ ] to control | pending |
-| Clouds | drifting alpha-quad cloud field with lit top / shaded underside | pending |
+| OpenGL + VS C++ (Clang) | `Town3D.vcxproj` (`ClangCL` default), `src/gl_core.*`, `build.bat` auto-detects clang-cl | **done** — B-2, builds and runs |
+| Humanoid player, WASD | `main.cpp` `movePlayer()` (eye height 1.7 m, walk/run, sub-stepped collision) | **done** — V-3, V-4 |
+| Mouse look | raw input (`WM_INPUT`) yaw/pitch, pitch clamped, no cursor warping | **done** — runs; feel needs your review (V-5) |
+| Town of rectangular buildings, houses → very tall blocks | `world.cpp` districts: core towers ~80–155 m, mid 16–58 m, suburbs 5–13 m houses (hip roofs) | **done** — V-2 (330 buildings) |
+| Town centre = skyscrapers | height/density by distance from (0,0); setbacks + antennas in the core | **done** — V-1 shot 01/03 |
+| Cannot enter buildings | every footprint in `World::blockers`, per-axis AABB test → impossible to pass a wall | **done** — V-3; 845 blockers |
+| Rivers with crossable bridges | two rivers on widened street corridors; 13 bridges with decks, solid railings, `bridgeZones` walk exceptions | **done** — V-2, V-7 (walkers cross only at bridges) |
+| Low detail | boxes + flat colours + a handful of quads; no textures, no meshes loaded; 19 942 tris for the whole town | **done** — by design |
+| Sun in the sky casting shadows | sun disc + glow in sky shader; 2048² shadow map + 3×3 PCF; animated day/night, T/[ ] to control | **done** — V-1 (sun +38° day, −80° midnight) |
+| Clouds | drifting alpha-quad cloud field with lit top / shaded underside | **done** — V-1 shot 06 |
+| *(added later)* People walking round the town | `people.cpp` nav lattice + BFS routes, downtown-biased errands | **done** — V-7 |
+| *(added later)* Crossing bridges | river links exist in the graph only at bridge decks; 66 crossings logged in 180 s | **done** — V-7 |
+| *(added later)* Avoiding each other | separation steering + 3-pass hard non-overlap on a 4 m grid | **done** — V-7 (0 overlapping pairs) |
+| *(added later)* Player cannot walk through them | `playerFreeAt()` = world **and** `People::blocks()`; they yield to you, you cannot shove them | **done** — V-7 probe, 0.75 m |
+| *(added later)* They must not walk through each other | same hard pass, axis-separated so a push never enters a wall | **done** — V-7 (0 in walls) |
+| *(added later)* Minecraft-style solid blocks for limbs/heads | `People::emit()`: 10 boxes per body (torso, head, hair, 2 arms, 2 legs, 2 shoes), flat colours | **done** — V-8, V-9 |

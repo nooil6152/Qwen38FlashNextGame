@@ -20,6 +20,7 @@
 
 #include "gl_core.h"
 #include "math3d.h"
+#include "people.h"
 #include "shaders.h"
 #include "world.h"
 
@@ -54,12 +55,17 @@ static float g_fps = 0.0f;
 static unsigned g_seed = 1337u;
 static int   g_frameErrors = 0;
 
-static World g_world;
+static World  g_world;
+static People g_people;              // the crowd: see people.h
+static int    g_pedCount = 120;      // --peds N   (0 = nobody about)
+static int    g_pedTris  = 0;
+static std::vector<Vertex> g_pedMesh;
 
 // GL objects
 static GLuint g_progSolid = 0, g_progDepth = 0, g_progSky = 0, g_progWater = 0, g_progCloud = 0;
 static GLuint g_vaoSolid = 0, g_vboSolid = 0, g_vaoWater = 0, g_vboWater = 0;
 static GLuint g_vaoCloud = 0, g_vboCloud = 0, g_vaoEmpty = 0;
+static GLuint g_vaoPed = 0, g_vboPed = 0;
 static GLuint g_shadowFbo = 0, g_shadowTex = 0;
 static int    g_solidTris = 0, g_waterTris = 0, g_cloudTris = 0;
 
@@ -273,6 +279,8 @@ static void setupMeshGpuObjects()
     gl.GenBuffers(1, &g_vboSolid);
     gl.GenBuffers(1, &g_vboWater);
     gl.GenBuffers(1, &g_vboCloud);
+    gl.GenVertexArrays(1, &g_vaoPed);
+    gl.GenBuffers(1, &g_vboPed);
     uploadMeshes();
 
     gl.BindVertexArray(g_vaoSolid);
@@ -305,6 +313,37 @@ static void setupMeshGpuObjects()
 
     gl.BindVertexArray(0);
     gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+// The crowd changes shape every frame, so it gets its own dynamic buffer with
+// the same vertex layout as the static town - the solid shader draws it for
+// free, which means pedestrians get lighting, fog and shadows for nothing.
+static void setupPedGpuObjects()
+{
+    gl.BindVertexArray(g_vaoPed);
+    gl.BindBuffer(GL_ARRAY_BUFFER, g_vboPed);
+    gl.EnableVertexAttribArray(0);
+    gl.VertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, kStride, (const void*)0);
+    gl.EnableVertexAttribArray(1);
+    gl.VertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, kStride, (const void*)(sizeof(float) * 3));
+    gl.EnableVertexAttribArray(2);
+    gl.VertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, kStride, (const void*)(sizeof(float) * 6));
+    gl.EnableVertexAttribArray(3);
+    gl.VertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, kStride, (const void*)(sizeof(float) * 9));
+    gl.BindVertexArray(0);
+    gl.BindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+static void uploadPedMesh()
+{
+    g_pedMesh.clear();
+    g_people.emit(g_pedMesh);
+    gl.BindBuffer(GL_ARRAY_BUFFER, g_vboPed);
+    // re-specifying the store each frame orphans the old one, so the GPU never
+    // stalls waiting for the previous frame to finish reading it
+    gl.BufferData(GL_ARRAY_BUFFER, (GLsizeiptr)(g_pedMesh.size() * sizeof(Vertex)),
+                  g_pedMesh.empty() ? nullptr : &g_pedMesh[0], GL_DYNAMIC_DRAW);
+    g_pedTris = (int)(g_pedMesh.size() / 3);
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +628,14 @@ static vec3 forwardDir()
     return vec3(cp * std::sin(g_yaw), std::sin(g_pitch), -cp * std::cos(g_yaw));
 }
 
+// Is the player's cylinder clear here? Walls, railings, water - and pedestrians,
+// who are as solid as a house wall. One place decides it, so the selftest probe
+// exercises the same rule the game does.
+static bool playerFreeAt(float x, float z)
+{
+    return !g_world.blockedAt(x, z) && !g_people.blocks(vec3(x, 0.0f, z), TW_PLAYER_R);
+}
+
 // Orthographic shadow volume centred on the player, snapped to shadow texels so
 // the shadow edges do not crawl while walking (ISS-004).
 static void lightMatrix(mat4& outVP, const vec3& sunDir, const vec3& around)
@@ -637,6 +684,8 @@ static void render(const SkyState& sky)
     lightMatrix(lvp, sky.dir, g_pos);
     const bool castShadows = g_shadowsOn && sky.day > 0.02f;
 
+    uploadPedMesh();          // the crowd walks, so its mesh is rebuilt per frame
+
     // ---- pass 1: sun depth -------------------------------------------------
     gl.BindFramebuffer(GL_FRAMEBUFFER, g_shadowFbo);
     glViewport(0, 0, SHADOW_RES, SHADOW_RES);
@@ -649,6 +698,11 @@ static void render(const SkyState& sky)
         glPolygonOffset(1.9f, 4.5f);
         gl.BindVertexArray(g_vaoSolid);
         gl.DrawArrays(GL_TRIANGLES, 0, (GLsizei)(g_solidTris * 3));
+        if (g_pedTris > 0)                        // people cast shadows too
+        {
+            gl.BindVertexArray(g_vaoPed);
+            gl.DrawArrays(GL_TRIANGLES, 0, (GLsizei)(g_pedTris * 3));
+        }
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
     gl.BindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -700,6 +754,11 @@ static void render(const SkyState& sky)
     gl.Uniform1i(g_uSolid.shadow, 0);
     gl.BindVertexArray(g_vaoSolid);
     gl.DrawArrays(GL_TRIANGLES, 0, (GLsizei)(g_solidTris * 3));
+    if (g_pedTris > 0)
+    {
+        gl.BindVertexArray(g_vaoPed);
+        gl.DrawArrays(GL_TRIANGLES, 0, (GLsizei)(g_pedTris * 3));
+    }
 
     // water (translucent, no depth write)
     glDepthMask(GL_FALSE);
@@ -790,8 +849,10 @@ static void movePlayer(float dt)
         {
             const float nx = g_pos.x + want.x * sd;
             const float nz = g_pos.z + want.z * sd;
-            if (!g_world.blockedAt(nx, g_pos.z)) g_pos.x = nx;
-            if (!g_world.blockedAt(g_pos.x, nz)) g_pos.z = nz;
+            const bool freeX = playerFreeAt(nx, g_pos.z);
+            const bool freeZ = playerFreeAt(g_pos.x, nz);
+            if (freeX) g_pos.x = nx;
+            if (freeZ) g_pos.z = nz;
         }
         g_bob += dist * 1.5f;
     }
@@ -849,12 +910,12 @@ static void drawHud(const SkyState& sky)
     const char* phase = sky.night > 0.60f ? "night" : (sky.day < 0.55f ? "dusk/dawn" : "day");
 
     sprintf(line, " Town3D   %5.1f fps   %7d tris   %dx%d   MSAA %d   shadow %dx%d ",
-            (double)g_fps, g_solidTris + g_waterTris + g_cloudTris, g_w, g_h, (int)g_msaa,
+            (double)g_fps, g_solidTris + g_waterTris + g_cloudTris + g_pedTris, g_w, g_h, (int)g_msaa,
             SHADOW_RES, SHADOW_RES);
     hudText(dc, 10, 8, line);
-    sprintf(line, " pos %8.1f %8.1f   facing %-2s (%3d deg)   sun %3d deg  %-9s   clock %5.1f   seed %u ",
+    sprintf(line, " pos %8.1f %8.1f   facing %-2s (%3d)   sun %3d deg %-9s  clock %5.1f  seed %u  peds %d ",
             (double)g_pos.x, (double)g_pos.z, compass(g_yaw), bearing, deg, phase,
-            (double)g_clock, g_seed);
+            (double)g_clock, g_seed, (int)g_people.peds.size());
     hudText(dc, 10, 28, line);
     sprintf(line, " WASD move   Shift run   mouse look   T sun %s   [ ] time   R new town   P shot   H hud   Esc quit ",
             g_sunAnim ? "AUTO" : "HELD");
@@ -1008,7 +1069,7 @@ static int runSelfTest()
     CreateDirectoryA("shots", nullptr);
     const vec3 core(0.0f, 0.0f, 0.0f);
     const float riverH = corline(TW_RIVER_H) + TW_ROAD * 0.5f;   // -77
-    Shot shots[6];
+    Shot shots[7];
     int n = 0;
     shots[n] = { "01_downtown_street", corline(4) + 7.0f, corline(6) + 7.0f,
                  yawToward(vec3(corline(4) + 7.0f, 0, corline(6) + 7.0f), core), 0.05f, 60.0f }; ++n;
@@ -1020,6 +1081,70 @@ static int runSelfTest()
     shots[n] = { "06_clouds", g_world.spawn.x, g_world.spawn.z, g_world.spawnYaw + 0.6f, 0.95f, 60.0f }; ++n;
 
     int errors = 0;
+
+    // Walk the crowd for a few minutes of simulated time first: it spreads them
+    // out for the pictures, and the numbers below are how the simulation is
+    // verified without anybody having to look at a screenshot.
+    if (!g_people.peds.empty())
+    {
+        g_people.simulate(g_world, 180.0f, g_world.spawn);
+        const People::Stats s = g_people.stats(g_world);
+        logfmt("[crowd] %d walkers, %d/%d walkable junctions, %d street links | "
+               "%d walking %d waiting %d on bridge | %d crossings | "
+               "overlaps %d in-walls %d in-water %d\n",
+               s.total, g_people.walkableNodes, g_people.nodes, g_people.edges,
+               s.walking, s.waiting, s.onBridge, s.crossings, s.overlaps, s.inSolid, s.inWater);
+        if (s.overlaps || s.inSolid || s.inWater)
+        {
+            ++errors;
+            logfmt("[crowd] FAULT: bodies overlapped or entered a wall/river\n");
+        }
+        if (s.crossings == 0)
+            logfmt("[crowd] note: nobody crossed a river this run\n");
+
+        // Shot 07 is framed on the busiest clump of walkers, so it cannot come
+        // out empty and the crowd-off / crowd-on comparison means something.
+        int best = 0, bestNear = -1;
+        for (size_t i = 0; i < g_people.peds.size(); ++i)
+        {
+            int nearby = 0;   // ('near' is a windows.h macro)
+            for (size_t k = 0; k < g_people.peds.size(); ++k)
+                if (k != i && length(g_people.peds[k].pos - g_people.peds[i].pos) < 30.0f) ++nearby;
+            if (nearby > bestNear) { bestNear = nearby; best = (int)i; }
+        }
+        const Person& q = g_people.peds[best];
+        const vec3 fwd(std::sin(q.yaw), 0.0f, -std::cos(q.yaw));
+        float px = q.pos.x - fwd.x * 5.0f, pz = q.pos.z - fwd.z * 5.0f;
+        if (g_world.blockedAt(px, pz)) { px = q.pos.x; pz = q.pos.z; }   // cornered: shoot from where they are
+        shots[n] = { "07_crowd_street", px, pz, yawToward(vec3(px, 0, pz), q.pos), -0.10f, 150.0f }; ++n;
+        logfmt("[crowd] shot 07 framed on the busiest street corner (%d walkers within 30 m)\n", bestNear);
+
+        // Push the player straight at a walker who is held still, and measure how
+        // close they get. Bodies are 0.30 m + 0.45 m apart, so anything under that
+        // means the player is inside somebody.
+        {
+            Person& held = g_people.peds[0];
+            const vec3 pin = held.pos;
+            vec3 from(pin.x + 3.0f, kEyeHigh, pin.z);
+            float best2 = 1e9f;
+            for (int step = 0; step < 300; ++step)
+            {
+                held.pos = pin; held.vel = vec3(0, 0, 0); held.wait = 1.0f;   // stand still for the test
+                const float dx = pin.x - from.x, dz = pin.z - from.z;
+                const float dl = std::sqrt(dx * dx + dz * dz);
+                if (dl < 1e-4f) break;
+                const float sd = 0.05f;
+                if (playerFreeAt(from.x + dx / dl * sd, from.z)) from.x += dx / dl * sd;
+                if (playerFreeAt(from.x, from.z + dz / dl * sd)) from.z += dz / dl * sd;
+                best2 = best2 < dl ? best2 : dl;
+            }
+            const float need = held.radius + TW_PLAYER_R;
+            logfmt("[crowd] walk-through probe: closest approach %.2f m against a %.2f m body %s\n",
+                   (double)best2, (double)need, best2 > need - 0.06f ? "ok" : "FAULT");
+            if (best2 <= need - 0.06f) { ++errors; }
+            held.wait = 0.0f;
+        }
+    }
     for (int i = 0; i < n; ++i)
     {
         g_clock = shots[i].clock;
@@ -1032,6 +1157,15 @@ static int runSelfTest()
         render(sky);
         errors += drainGlErrors(shots[i].name);
 
+        // how much crowd is actually in this frame?
+        int nearPeds = 0; float nearD = 1e9f;
+        for (size_t k = 0; k < g_people.peds.size(); ++k)
+        {
+            const float d = length(g_people.peds[k].pos - vec3(g_pos.x, 0.0f, g_pos.z));
+            if (d < 60.0f) ++nearPeds;
+            if (d < nearD) nearD = d;
+        }
+
         char path[256];
         sprintf(path, "shots/%s.bmp", shots[i].name);
         const bool saved = captureBmp(path);
@@ -1039,9 +1173,10 @@ static int runSelfTest()
                "detail %5.2f  chroma %4.1f  colors %4d\n",
                shots[i].name, g_stats.luma, g_stats.skyLuma, g_stats.gndLuma, g_stats.dark,
                g_stats.blown, g_stats.detail, g_stats.chroma, g_stats.colors);
-        logfmt("       sun %5.1f deg  night %4.2f  clock %5.1f  blockedAt=%d  %s\n",
+        logfmt("       sun %5.1f deg  night %4.2f  clock %5.1f  blockedAt=%d  pedtris %5d  peds<60m %2d  nearest %6.1f  %s\n",
                sky.elevation * 180.0f / kPi, sky.night, (double)g_clock,
-               g_world.blockedAt(g_pos.x, g_pos.z) ? 1 : 0, saved ? "saved" : "FAILED");
+               g_world.blockedAt(g_pos.x, g_pos.z) ? 1 : 0, g_pedTris, nearPeds,
+               g_people.peds.empty() ? 0.0f : nearD, saved ? "saved" : "FAILED");
     }
     logfmt("[selftest] done, %d shots, %d GL errors\n", n, errors);
     return errors ? 2 : 0;
@@ -1054,8 +1189,10 @@ static void regenerateTown()
 {
     g_seed = (unsigned)(GetTickCount() ^ (GetTickCount64() >> 7));
     g_world.build(g_seed);
+    g_people.build(g_world, g_seed ^ 0x9E3779B9u, g_pedCount);
     uploadMeshes();
     resetPlayerToSpawn();
+    g_people.pushOut(g_pos, TW_PLAYER_R);   // never start inside somebody
     logfmt("[town] regenerated with seed %u\n", g_seed);
 }
 
@@ -1071,6 +1208,7 @@ static void usage()
            "  --clock S         start time on the 600 s day cycle (default 60)\n"
            "  --nomsaa          plain pixel format instead of 4x MSAA\n"
            "  --noshadows       skip the shadow pass (A/B debugging)\n"
+           "  --peds N          pedestrians wandering the town (default 120, 0 off)\n"
            "  --showlog         keep the console window visible\n\n"
            "In game: WASD/arrows move, Shift run, mouse look, T sun auto on/off,\n"
            "[ ] scrub time, R new town, P screenshot, H hide HUD, Esc quit.\n");
@@ -1091,11 +1229,14 @@ int main(int argc, char** argv)
         else if (!strcmp(argv[i], "--clock") && i + 1 < argc) g_clock = (float)atof(argv[++i]);
         else if (!strcmp(argv[i], "--nomsaa")) samples = 0;
         else if (!strcmp(argv[i], "--noshadows")) g_shadowsOn = false;
+        else if (!strcmp(argv[i], "--peds") && i + 1 < argc) g_pedCount = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--showlog")) showLog = true;
         else if (!strcmp(argv[i], "--trace")) g_trace = true;
         else if (!strcmp(argv[i], "--help") || !strcmp(argv[i], "-h")) { usage(); return 0; }
         else printf("ignoring argument '%s'\n", argv[i]);
     }
+    // clamped outside the chain: an if between the else-ifs would break it
+    g_pedCount = g_pedCount < 0 ? 0 : (g_pedCount > 400 ? 400 : g_pedCount);
     if (g_w < 160) g_w = 1280;
     if (g_h < 120) g_h = 720;
 
@@ -1105,8 +1246,11 @@ int main(int argc, char** argv)
 
     if (!initGL(samples)) { logfmt("[init] OpenGL init failed - see messages above\n"); return 1; }
     g_world.build(g_seed);
+    g_people.build(g_world, g_seed ^ 0x9E3779B9u, g_pedCount);
     createGpuObjects();
+    setupPedGpuObjects();
     resetPlayerToSpawn();
+    g_people.pushOut(g_pos, TW_PLAYER_R);
     drainGlErrors("after init");
     logfmt("[init] ready (seed %u, %d shadow casters)\n", g_seed, g_solidTris);
 
@@ -1144,6 +1288,7 @@ int main(int argc, char** argv)
 
         lookAround();
         movePlayer(dt);
+        g_people.update(g_world, dt, g_pos);
         tickTime(dt);
         if (g_wantRegen) { g_wantRegen = false; regenerateTown(); }
 
@@ -1175,7 +1320,7 @@ int main(int argc, char** argv)
         if (g_trace && g_frames && g_frames % 240 == 0)
             logfmt("[perf] frame %u  %.1f fps  pos %.1f,%.1f  clock %.1f  tris %d\n", g_frames,
                    (double)g_fps, (double)g_pos.x, (double)g_pos.z, (double)g_clock,
-                   g_solidTris + g_waterTris + g_cloudTris);
+                   g_solidTris + g_waterTris + g_cloudTris + g_pedTris);
     }
 
     setCursorHidden(false);

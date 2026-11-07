@@ -430,3 +430,6 @@ FodyWeavers.xsd
 # Rendered screenshots: regenerate with  bin\Town3D.exe --selftest
 # (16 MB of BMPs, derived data - not worth versioning)
 shots/*.bmp
+
+# local editor/model-runner config on this machine - nothing to do with the game
+strata-config.json

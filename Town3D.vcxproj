@@ -94,12 +94,14 @@
 
   <ItemGroup>
     <ClCompile Include="src\gl_core.cpp" />
+    <ClCompile Include="src\people.cpp" />
     <ClCompile Include="src\world.cpp" />
     <ClCompile Include="src\main.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\gl_core.h" />
     <ClInclude Include="src\math3d.h" />
+    <ClInclude Include="src\people.h" />
     <ClInclude Include="src\shaders.h" />
     <ClInclude Include="src\world.h" />
     <None Include="LEDGER.md" />

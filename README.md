@@ -50,12 +50,13 @@ so the night is genuinely dark, the stars come out and the windows in the buildi
 
 | Flag | Effect |
 |---|---|
-| `--selftest` | Renders 6 fixed views into `shots\*.bmp`, prints frame statistics, exits |
+| `--selftest` | Renders 7 fixed views into `shots\*.bmp`, prints frame statistics and a crowd audit, exits |
 | `--seed N` | Town seed (default 1337) — same seed, same town |
 | `--width N` `--height N` | Window size (default 1280x720) |
 | `--clock S` | Start time on the 600 s cycle (default 60) |
 | `--nomsaa` | No MSAA (plain pixel format) |
 | `--noshadows` | Skip the shadow pass — A/B debugging for shadow artefacts |
+| `--peds N` | How many pedestrians are about (default 120, `0` for an empty town, max 400) |
 | `--showlog` | Keep the console visible |
 | `--trace` | Log Win32 message traffic + a perf line every 240 frames |
 
@@ -66,6 +67,7 @@ so the night is genuinely dark, the stars come out and the windows in the buildi
 | `src/gl_core.h/.cpp` | GL tokens + function-pointer loader (`wglGetProcAddress`, with the GL 1.1 import fallback) |
 | `src/math3d.h` | `vec3` / column-major `mat4`, perspective/ortho/lookAt |
 | `src/world.h/.cpp` | the whole town generator: rivers, bridges, 4 districts, streets, lamps, trees, clouds, collision boxes |
+| `src/people.h/.cpp` | the pedestrians: street navigation graph, routes, avoidance, blocky bodies |
 | `src/shaders.h` | the 5 GLSL programs (solid, depth-only, sky, water, cloud) |
 | `src/main.cpp` | window, wgl bootstrap, day/night model, render passes, player, HUD, screenshots, self-test |
 
@@ -81,6 +83,16 @@ so the night is genuinely dark, the stars come out and the windows in the buildi
   that decides whether a window is lit at night.
 * **Clouds** are ~90 groups of flat-tinted quads at 205–300 m, drawn in three tiled offsets so they wrap
   without tearing, with alpha fading out at the fog line.
+* **People** plan on a graph of street intersections, not on the ground plane: a walker picks an errand,
+  pathfinds over the lattice, and follows it. Links across a river exist **only** where a bridge deck is, so
+  pedestrians cross at bridges because there is literally no other way — the same rule keeps them off lamp
+  posts and trees, since a junction is a node only if the town's own collision test says it is free. Each body
+  is 10 solid boxes (torso, head, hair, two arms, two legs, two shoes) drawn with the town's shader, so they are
+  lit, fogged and shadow-casting like everything else.
+* **Nobody shares space.** Soft steering makes them edge round each other; a hard pass afterwards guarantees
+  overlap is zero, pushing along X or Z separately so a shove never puts somebody through a wall. The player is
+  immovable in that exchange — walkers step around you, you never push one along, and you cannot walk through
+  one either.
 
 ## Verifying it without playing
 
@@ -88,13 +100,28 @@ so the night is genuinely dark, the stars come out and the windows in the buildi
 bin\Town3D.exe --selftest
 ```
 
-writes six BMPs and, for each, a line of measurements — mean luminance, sky-vs-ground luminance, share of
-near-black and blown pixels, a horizontal-contrast "is there geometry" figure, and how many distinct colour
-buckets appear. That is what catches a black frame, an empty scene or a blown-out sky without anyone having
-to look at a picture. Current run: 6/6 shots, **0 GL errors**.
+writes seven BMPs and, for each, a line of measurements — mean luminance, sky-vs-ground luminance, share of
+near-black and blown pixels, a horizontal-contrast "is there geometry" figure, how many distinct colour
+buckets appear, and how many walkers are within 60 m of that camera. That is what catches a black frame, an
+empty scene or a blown-out sky without anyone having to look at a picture. Current run: 7/7 shots,
+**0 GL errors**.
+
+Before the pictures it also walks the crowd for 180 simulated seconds and audits it:
+
+```
+[crowd] 120 walkers, 157/169 walkable junctions, 268 street links | 119 walking 1 waiting 9 on bridge |
+        66 crossings | overlaps 0 in-walls 0 in-water 0
+[crowd] walk-through probe: closest approach 0.75 m against a 0.75 m body ok
+```
+
+The 12 unusable junctions are exactly the ones standing in open water, `66 crossings` says the routes really do
+use the bridges, the three zeroes are the "they must not walk through each other / into walls / into rivers"
+requirement, and the probe is "I cannot walk through them": walking into a person stops you at 0.75 m, which is
+their 0.30 m radius plus your 0.45 m one.
 
 `tools/smoke.ps1` launches the real window, waits, reports CPU/RSS and kills it — a regression check for
-"does the app still survive its own message loop" (it did not, once: see LEDGER.md ISS-019).
+"does the app still survive its own message loop" (it did not, once: see LEDGER.md ISS-019). Add
+`-Extra "--peds 400"` to stress the crowd: still 60 fps, about 63 000 triangles a frame.
 
 ## Known issues
 
@@ -104,3 +131,8 @@ its reasoning, and the issue register (including the bugs found while getting th
 
 Night is currently very dark (`LEDGER.md` ISS-021), and the rivers are two big quads — ripples come from the
 fragment shader, so they look fine, but there is no real wave geometry (ISS-022).
+
+The crowd walks, crosses bridges and refuses to overlap, but it has no *life* yet: the same number of people are
+out at midnight as at noon, there is no rush hour and nobody waits to cross (ISS-026). Pedestrians are also
+animated on the CPU today, which is cheap enough at 400 walkers but is the first thing to instance if the crowd
+grows (ISS-027).

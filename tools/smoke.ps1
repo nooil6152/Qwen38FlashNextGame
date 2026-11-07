@@ -1,6 +1,8 @@
-param([string]$Exe = "bin\Town3D.exe", [int]$Seconds = 7)
+param([string]$Exe = "bin\Town3D.exe", [int]$Seconds = 7, [string]$Extra = "")
 $ErrorActionPreference = "Stop"
-$p = Start-Process -FilePath $Exe -ArgumentList @("--showlog","--trace") -WorkingDirectory (Get-Location) -PassThru
+$argv = @("--showlog", "--trace")
+if ($Extra -ne "") { $argv += $Extra.Split(" ") }
+$p = Start-Process -FilePath $Exe -ArgumentList $argv -WorkingDirectory (Get-Location) -PassThru
 Start-Sleep -Seconds $Seconds
 if (-not $p.HasExited) {
     $p.Refresh()
