@@ -1,12 +1,14 @@
 # CONTINUE.md — Town3D resume notes
 
-**Last saved:** after fixing the sunk pedestrians (ISS-028 / ISS-029), on top of `v0.2`. Repo
-**`github.com/nooil6152/Qwen38FlashNextGame`**, branch `main` (`46dd539` was the commit before this pass). Tags:
-**`v0.2` = `8a36c80`** (pedestrians, as they were before this fix), `v0.1` = `91b4974` (first working build). The ground
-fix is **untagged** - tag it only when asked. `build.bat Release` compiles with clang-cl and `bin\Town3D.exe` runs:
-`--selftest` = 7 shots + crowd audit (routing, crossings, overlaps, walk-through probe, **ground contact**), 0 GL
-errors; interactive = 60 fps with 120 walkers (and with 400). Companion document: `LEDGER.md` (work journal, design
-decisions D-1…D-16, ISS-001…ISS-030, verification V-1…V-10, and **§0a - the prompt log**).
+**Last saved:** `v0.3` = **`4d6c83a`** (ground following for walkers and player), tagged and pushed. Repo
+**`github.com/nooil6152/Qwen38FlashNextGame`**, `main` is that commit plus a docs commit. Older tags: `v0.2` =
+`8a36c80` (pedestrians, pre-fix), `v0.1` = `91b4974` (first working build).
+**What `v0.3` is:** it **runs** — that is the bar for a tag here, not correctness. `build.bat Release` compiles with
+clang-cl; `--selftest` = 7 shots + crowd audit, 0 GL errors; interactive = 60 fps at 120 and 400 walkers.
+**What is still broken:** ISS-031 every BMP is saved vertically mirrored, and ISS-032 walkers still read as sunk —
+and ISS-032 exists because **V-10 was a circular test**: it checked `pos.y` against `surfaceAt()`, the very function
+the fix uses, and never once looked at the triangles that reach the GPU. Companion document: `LEDGER.md` (work
+journal, D-1…D-16, ISS-001…ISS-032, V-1…V-10, and **§0a - the prompt log**).
 
 **Work happens in `C:\Source\Qwen38FlashNextGame` — that is the git checkout.** `C:\Source\game` is the *stale copy
 from before the project was moved*: no `.git`, older sources, no `people.*`, no `tools\`. Editing there loses work
@@ -94,20 +96,27 @@ Pedestrian parameters (load-bearing):
 
 ## 5. Open work, best-value first
 
-1. **Human verification (V-5).** Nobody has *seen* it yet — the model has no image input, so all verification so
-   far is numeric. Walkers are now *provably* standing on the surface (V-10) but that is not the same as looking
-   right. Ask the user to run `bin\Town3D.exe` and report how it looks, especially: do the walkers look like people
-   from 3 m, do they jostle unnaturally, is 120 the right crowd size (`--peds N`), and does the eye stepping up onto
-   a bridge deck feel right.
-2. **ISS-021 night is too dark** (`gnd` luma ≈ 5/255). Options in the ledger row; needs the user's taste.
-3. **ISS-026 the crowd has no rhythm** — identical numbers of walkers at midnight and at noon, no rush hour,
+1. **ISS-031 then ISS-032, in that order.** Fix the mirrored BMP first (`captureBmp`, the copy loop reverses rows it
+   should copy straight) — every picture anyone has judged, including the report of sunk walkers, came from a flipped
+   file, and although a mirror preserves ground contact it is still the first variable to remove. Then measure with
+   **independent** ground truth, never with the same helper the fix uses:
+   (a) ray-cast `World::solid` for the highest triangle over a grid of street/deck/kerb/block points and compare that
+   with `surfaceAt()` — if they disagree, the picture shows a sunk walker whatever `People::update()` computes;
+   (b) read back the emitted ped vertex range and compare it with the walker's feet and its 1.765 m height — that
+   catches a `addBox`/`toWorld` sign or stride error that `pos.y` audits cannot see;
+   (c) then, and only then, look at a corrected screenshot.
+2. **Human verification (V-5).** The model has no image input, so all verification here is numeric. The user has now
+   looked at it twice and found both of the above, which is the whole reason numeric audits must be independent of
+   the code they are auditing.
+3. **ISS-021 night is too dark** (`gnd` luma ≈ 5/255). Options in the ledger row; needs the user's taste.
+4. **ISS-026 the crowd has no rhythm** — identical numbers of walkers at midnight and at noon, no rush hour,
    nobody waits to cross. Cheapest version: scale the active count by hour (park the rest in `wait` overnight).
-4. **Play-test the requirements** (`LEDGER.md` §6): can't enter buildings, bridges are the only crossings,
+5. **Play-test the requirements** (`LEDGER.md` §6): can't enter buildings, bridges are the only crossings,
    shadows track the sun, clouds drift. Then mark B/V rows accordingly.
-5. **ISS-027** CPU skinning of the crowd (~13 k tris re-uploaded per frame at 120 walkers) — instance it if the
+6. **ISS-027** CPU skinning of the crowd (~13 k tris re-uploaded per frame at 120 walkers) — instance it if the
    crowd ever grows. **ISS-022** water = 2 quads (cosmetic). **ISS-030** kerb and deck edges are steps, not ramps:
    add ramp quads at the bridge mouths in `world.cpp` if the 9–14 cm snap shows up on camera.
-6. Optional: moon + moonlight at night, lamp-pool lights, `--walktest N` headless collision sweep (would turn
+7. Optional: moon + moonlight at night, lamp-pool lights, `--walktest N` headless collision sweep (would turn
    "can't walk into buildings" into an automated check instead of a play-test, the same way the crowd probe
    already proves "can't walk into people").
 
@@ -143,5 +152,12 @@ Useful log greps: `grep -E "shot|luma" town3d.log`, `grep -E "^\[crowd\]" town3d
 - `World::blockedAt` is the single source of truth for walkability. Anything new that can be walked into must be
   added to `blockers` — then pedestrians exclude it from the nav graph automatically, with no code there.
 - **Append every prompt that changes code to `LEDGER.md` section 0a**, the prompt log, in order, as received.
+- **Every green build gets committed, pushed and tagged** (user's standing instruction, 2026-11-07), then said out
+  loud as done. "Green" = it compiles and runs; a tag is a restore point, not a quality award, so open bugs do NOT
+  hold a tag back. Annotated tags, repo-local identity, verify the remote afterwards and run the name-leak scan over
+  every revision.
+- **`captureBmp` mirrors the image vertically** (ISS-031) while `analyzeFrame` reads GL row order (row 0 = bottom).
+  So the logged `sky`/`gnd` figures are correct and comparable, but every `.bmp` on disk is upside down. Until it is
+  fixed, flip any screenshot before judging it.
   Requests about git operations, and anything containing personal identifying details, are left out and must
   stay out — that log is published inside the repository.

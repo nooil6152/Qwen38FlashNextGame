@@ -18,10 +18,13 @@ quads and pyramids, no textures, no model files, no third-party libraries.
 
 | Tag | Commit | What it is |
 |---|---|---|
-| **`v0.2`** | `8a36c80` | **current** — pedestrians: they walk the street network, cross at bridges, avoid one another, and are solid to you |
+| **`v0.3`** | `4d6c83a` | **current** — adds ground following: walkers stand on the surface instead of 5 cm inside the road, and the player's eye rides decks (`LEDGER.md` ISS-028/029) |
+| `v0.2` | `8a36c80` | pedestrians: they walk the street network, cross at bridges, avoid one another, and are solid to you |
 | `v0.1` | `91b4974` | first working version — town, two rivers and bridges, sun with shadow mapping, clouds, 600 s day/night cycle |
 
-`main` can carry fixes past the newest tag; the table lists tagged builds only.
+A tag means **this compiles and runs**, not that it is finished or correct: `v0.3` still has two open visual defects
+(mirrored screenshots, walkers that read as sunk) and `LEDGER.md` is the place that says what is broken. Tags are cut
+on every green build, so `git clone -b v0.3` always gets you a build that starts.
 
 Both are annotated tags carrying a one-line message. They are **unsigned** — no signing key is configured on the
 machine that builds this — so GitHub shows no *Verified* badge; that is expected, not a warning.
